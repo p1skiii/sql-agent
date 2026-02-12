@@ -49,6 +49,10 @@ def load_config(cli_overrides: Dict[str, Any] | None = None) -> AgentConfig:
         selfcheck_enabled=_parse_bool(env.get("SQL_AGENT_SELFCHECK"), defaults.selfcheck_enabled),
         language=env.get("SQL_AGENT_LANGUAGE", defaults.language),
         allow_llm_summary=_parse_bool(env.get("SQL_AGENT_ALLOW_LLM_SUMMARY"), defaults.allow_llm_summary),
+        allow_write=_parse_bool(env.get("SQL_AGENT_ALLOW_WRITE"), defaults.allow_write),
+        require_where=_parse_bool(env.get("SQL_AGENT_REQUIRE_WHERE"), defaults.require_where),
+        dry_run_default=_parse_bool(env.get("SQL_AGENT_DRY_RUN_DEFAULT"), defaults.dry_run_default),
+        allow_force=_parse_bool(env.get("SQL_AGENT_ALLOW_FORCE"), defaults.allow_force),
     )
 
     for key, value in cli_overrides.items():

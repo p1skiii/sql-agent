@@ -9,13 +9,14 @@ import math
 from sql_agent_demo.core.models import (
     AgentContext,
     DbExecutionError,
+    IntentType,
     LlmNotConfigured,
     StepTrace,
     SqlAgentError,
     SqlGuardViolation,
     TaskStatus,
 )
-from sql_agent_demo.core.sql_agent import run_task
+from sql_agent_demo.core.sql_agent import run_task, run_write_query
 from sql_agent_demo.infra.config import load_config
 from sql_agent_demo.infra.db import init_sandbox_db
 from sql_agent_demo.infra.env import load_env_file
@@ -33,6 +34,7 @@ def _add_shared_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--sql-model", dest="sql_model_name", type=str, help="Model name for SQL generation.")
     parser.add_argument("--trace", dest="allow_trace", action="store_true", help="Show trace even on success.")
     parser.add_argument("--selfcheck", dest="selfcheck_enabled", action="store_true", help="Enable SQL selfcheck.")
+    parser.add_argument("--allow-write", dest="allow_write", action="store_true", help="Enable write operations.")
     parser.add_argument(
         "--show-sql",
         dest="show_sql",
@@ -41,8 +43,12 @@ def _add_shared_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _bool_arg(val: str) -> bool:
+    return str(val).lower() not in ("0", "false", "no", "off")
+
+
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Read-only SQL agent demo.")
+    parser = argparse.ArgumentParser(description="SQL agent demo (read + guarded write).")
     subparsers = parser.add_subparsers(dest="command")
     subparsers.required = False
     parser.set_defaults(command="ask")
@@ -56,8 +62,23 @@ def _parse_args() -> argparse.Namespace:
     file_parser.add_argument("--limit", type=int, default=1, help="Run at most this many queries from the file.")
     _add_shared_arguments(file_parser)
 
+    write_parser = subparsers.add_parser("write", help="Run a single write (INSERT/UPDATE/DELETE).")
+    write_parser.add_argument("question", type=str, help="Write request in English.")
+    _add_shared_arguments(write_parser)
+    write_parser.add_argument(
+        "--dry-run",
+        dest="dry_run",
+        type=_bool_arg,
+        nargs="?",
+        const=True,
+        default=None,
+        help="Execute then roll back (default). Pass false to commit.",
+    )
+    write_parser.add_argument("--force", dest="force", action="store_true", help="Skip WHERE requirement (dangerous).")
+    write_parser.set_defaults(dry_run=None, force=None)
+
     argv = sys.argv[1:]
-    known_commands = {"ask", "run-file"}
+    known_commands = {"ask", "run-file", "write"}
     if argv and argv[0] not in known_commands and not argv[0].startswith("-"):
         argv = ["ask", *argv]
 
@@ -151,7 +172,7 @@ def _print_result(result, show_trace: bool, show_sql: bool) -> int:
         hint = "Try rephrasing with the columns you need." if "fabricate" in reason.lower() else "Try a simpler read-only question."
         sql_preview = None
         for step in trace_steps:
-            if step.name == "generate_sql" and step.output_preview:
+            if step.name in ("generate_sql", "generate_write_sql") and step.output_preview:
                 sql_preview = step.output_preview
                 break
         print(f"{title}: {result.status.value}")
@@ -194,6 +215,9 @@ def main() -> None:
         "sql_model_name": args.sql_model_name,
         "allow_trace": args.allow_trace,
         "selfcheck_enabled": args.selfcheck_enabled,
+        "allow_write": getattr(args, "allow_write", None),
+        "dry_run_default": getattr(args, "dry_run", None),
+        "allow_force": getattr(args, "force", None),
     }
 
     config = load_config(overrides)
@@ -211,6 +235,20 @@ def main() -> None:
         intent_model=intent_model,
         sql_model=sql_model,
     )
+
+    if args.command == "write":
+        force = bool(getattr(args, "force", False))
+        dry_run = getattr(args, "dry_run", None)
+        result = run_write_query(
+            question=args.question,
+            ctx=ctx,
+            intent=IntentType.WRITE,
+            traces=[],
+            dry_run=dry_run,
+            force=force,
+        )
+        code = _print_result(result, show_trace=args.allow_trace, show_sql=args.show_sql)
+        sys.exit(code)
 
     if args.command == "run-file":
         try:

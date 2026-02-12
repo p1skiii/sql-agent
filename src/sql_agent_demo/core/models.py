@@ -75,6 +75,10 @@ class AgentConfig:
     selfcheck_enabled: bool = False
     language: str = "en"
     allow_llm_summary: bool = False
+    allow_write: bool = False
+    require_where: bool = True
+    dry_run_default: bool = True
+    allow_force: bool = False
 
 
 @dataclass

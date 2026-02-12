@@ -18,8 +18,9 @@ from .models import (
     StepTrace,
     TaskResult,
     TaskStatus,
+    SqlGuardViolation,
 )
-from .safety import validate_readonly_sql
+from .safety import validate_readonly_sql, validate_write_sql
 from .summarizer import summarize
 
 
@@ -28,6 +29,7 @@ class SqlGenerationResult:
     sql: str
     tables: list[str] | None = None
     assumptions: str | None = None
+    kind: str | None = None
 
 
 def _preview(text: str, limit: int = 200) -> str:
@@ -151,6 +153,49 @@ def _generate_sql_with_llm(
     assumptions = str(assumptions) if assumptions is not None else None
 
     return SqlGenerationResult(sql=text, tables=tables, assumptions=assumptions)
+
+
+def _generate_write_sql(
+    question: str, schema_snippet: str, model: Any, top_k: int
+) -> SqlGenerationResult | None:
+    system_prompt = (
+        "You are an expert SQL assistant. Generate ONE safe data-modifying statement (INSERT, UPDATE, or DELETE). "
+        "Rules: only one statement; UPDATE/DELETE must include a WHERE clause; never use DROP/ALTER/TRUNCATE/DDL; "
+        "do not fabricate columns; respond ONLY with JSON: {\"sql\": \"...\", \"tables\": [\"...\"], \"assumptions\": \"...\"}."
+    )
+    user_prompt = (
+        f"Database schema (top {top_k} tables/columns):\n{schema_snippet}\n\n"
+        f"Question: {question}\nReturn only JSON."
+    )
+
+    payload = model.generate_json(
+        [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+    )
+    if not isinstance(payload, dict):
+        return None
+
+    sql_text = str(payload.get("sql", "")).strip()
+    if not sql_text:
+        return None
+
+    text = sql_text
+    if "```" in text:
+        parts = text.split("```")
+        if len(parts) >= 2:
+            text = parts[1].strip()
+        text = text.replace("sql", "", 1).strip() if text.lower().startswith("sql") else text
+
+    tables = payload.get("tables")
+    if tables is not None and not isinstance(tables, list):
+        tables = None
+
+    assumptions = payload.get("assumptions")
+    assumptions = str(assumptions) if assumptions is not None else None
+
+    return SqlGenerationResult(sql=text, tables=tables, assumptions=assumptions, kind="write")
 
 
 def _needs_llm_summary(question: str) -> bool:
@@ -645,6 +690,131 @@ def run_read_query(
     )
 
 
+def run_write_query(
+    question: str,
+    ctx: AgentContext,
+    intent: IntentType,
+    traces: list[StepTrace] | None = None,
+    budget: TokenBudget | None = None,
+    dry_run: bool | None = None,
+    force: bool = False,
+) -> TaskResult:
+    traces = traces or []
+    budget = budget or TokenBudget(
+        max_step_tokens=ctx.config.max_prompt_tokens,
+        max_total_tokens=ctx.config.max_total_tokens,
+    )
+
+    if not ctx.config.allow_write:
+        return TaskResult(
+            intent=intent,
+            status=TaskStatus.UNSUPPORTED,
+            query_result=None,
+            error_message="Write operations are disabled. Use --allow-write to enable.",
+            raw_question=question,
+            trace=traces,
+        )
+
+    if force and not ctx.config.allow_force:
+        return TaskResult(
+            intent=intent,
+            status=TaskStatus.UNSUPPORTED,
+            query_result=None,
+            error_message="Force execution is not allowed.",
+            raw_question=question,
+            trace=traces,
+        )
+
+    full_schema = ctx.db_handle.get_table_info()
+    schema_snippet = select_schema_subset(question, full_schema, ctx.config.top_k, max_columns=5)
+    traces.append(StepTrace(name="load_schema", output_preview=_preview(schema_snippet)))
+
+    gen = _generate_write_sql(question, schema_snippet, ctx.sql_model, ctx.config.top_k)
+    if not gen:
+        return TaskResult(
+            intent=intent,
+            status=TaskStatus.UNSUPPORTED,
+            query_result=None,
+            error_message="Model refused to generate a write SQL statement.",
+            raw_question=question,
+            trace=traces,
+        )
+
+    gen_metrics = _last_metrics(ctx.sql_model)
+    traces.append(
+        StepTrace(
+            name="generate_write_sql",
+            output_preview=_preview(gen.sql),
+            **_metric_fields(gen_metrics),
+        )
+    )
+    err = budget.record(gen_metrics, "generate_write_sql")
+    if err:
+        return TaskResult(
+            intent=intent,
+            status=TaskStatus.ERROR,
+            query_result=None,
+            error_message=err,
+            raw_question=question,
+            trace=traces,
+        )
+
+    require_where = ctx.config.require_where and not (force and ctx.config.allow_force)
+    try:
+        validate_write_sql(gen.sql, require_where=require_where)
+    except SqlGuardViolation as exc:
+        return TaskResult(
+            intent=intent,
+            status=TaskStatus.UNSUPPORTED,
+            query_result=None,
+            error_message=exc.reason,
+            raw_question=question,
+            trace=traces,
+        )
+
+    use_dry_run = ctx.config.dry_run_default if dry_run is None else dry_run
+
+    try:
+        affected, last_row_id = ctx.db_handle.execute_write(gen.sql, dry_run=use_dry_run, require_where=require_where)
+    except DbExecutionError as exc:
+        return TaskResult(
+            intent=intent,
+            status=TaskStatus.ERROR,
+            query_result=None,
+            error_message=exc.inner_message,
+            raw_question=question,
+            trace=traces,
+        )
+
+    traces.append(
+        StepTrace(
+            name="execute_write",
+            output_preview=f"affected_rows={affected}, dry_run={use_dry_run}",
+        )
+    )
+
+    state = "Dry-run" if use_dry_run else "Committed"
+    summary_parts = [f"{state}: {affected} row(s) affected"]
+    if last_row_id and affected > 0:
+        summary_parts.append(f"last_row_id={last_row_id}")
+    summary = "; ".join(summary_parts)
+
+    return TaskResult(
+        intent=intent,
+        status=TaskStatus.SUCCESS,
+        query_result=QueryResult(
+            sql=gen.sql,
+            columns=[],
+            rows=[],
+            summary=summary,
+            trace=traces if ctx.config.allow_trace else None,
+        ),
+        error_message=None,
+        raw_question=question,
+        trace=traces,
+    )
+
+
 def run_task(question: str, ctx: AgentContext) -> TaskResult:
     traces: list[StepTrace] = []
     budget = TokenBudget(
@@ -676,11 +846,14 @@ def run_task(question: str, ctx: AgentContext) -> TaskResult:
     if intent in (IntentType.READ_SIMPLE, IntentType.READ_ANALYTIC):
         return run_read_query(question, ctx, intent, traces, budget)
 
+    if intent == IntentType.WRITE:
+        return run_write_query(question, ctx, intent, traces, budget)
+
     return TaskResult(
         intent=intent,
         status=TaskStatus.UNSUPPORTED,
         query_result=None,
-        error_message="Only read-only SELECT queries are supported in this demo.",
+        error_message="Only read/write database questions are supported in this demo.",
         raw_question=question,
         trace=traces,
     )
@@ -690,8 +863,10 @@ __all__ = [
     "SqlGenerationResult",
     "select_schema_subset",
     "_generate_sql_with_llm",
+    "_generate_write_sql",
     "_selfcheck_sql",
     "repair_sql",
     "run_read_query",
+    "run_write_query",
     "run_task",
 ]

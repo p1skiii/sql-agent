@@ -1,6 +1,6 @@
-# LangChain SQL Agent Demo – Read-Only NL→SQL
+# LangChain SQL Agent Demo – Read/Write (guarded) NL→SQL
 
-Turn English questions into safe, read-only SQL over a SQLite sandbox. Backend-only (Python 3.11) with a CLI and Python API; no writes.
+Turn English questions into safe, primarily read-only SQL over a SQLite sandbox. Backend-only (Python 3.11) with a CLI and Python API; writes are opt-in and guarded.
 
 ## Quickstart
 1) Install deps: `uv sync`
@@ -25,6 +25,8 @@ Turn English questions into safe, read-only SQL over a SQLite sandbox. Backend-o
 ## Usage
 - CLI (single): `uv run sql-agent-demo "Which courses have 4 credits?" --trace --show-sql`
 - CLI (file, first query only by default): `uv run sql-agent-demo run-file datasets/sample.yaml --limit 1 --trace`
+- CLI (guarded write, dry-run by default): `uv run sql-agent-demo write "Update students set gpa = 3.8 where name = 'Alice Johnson'" --allow-write`
+- Commit a write (skip dry-run): `uv run sql-agent-demo write "Update students set gpa = 3.6 where name = 'Alice Johnson'" --allow-write --dry-run=false`
 - Python:
   ```python
   from sql_agent_demo.infra.config import load_config
