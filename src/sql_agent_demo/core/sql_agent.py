@@ -825,10 +825,48 @@ def run_write_query(
             trace=traces,
         )
 
-    use_dry_run = ctx.config.dry_run_default if dry_run is None else dry_run
+    user_dry_run = ctx.config.dry_run_default if dry_run is None else dry_run
+    is_update_or_delete = gen.sql.strip().lower().startswith(("update", "delete"))
+
+    # Always probe updates/deletes to detect wide impact
+    probe_affected = None
+    probe_needed = is_update_or_delete and (not user_dry_run or force)
+    if probe_needed:
+        try:
+            probe_affected, _ = ctx.db_handle.execute_write(gen.sql, dry_run=True, require_where=require_where)
+            traces.append(
+                StepTrace(
+                    name="execute_write_probe",
+                    output_preview=f"affected_rows={probe_affected}, dry_run=True",
+                )
+            )
+        except DbExecutionError as exc:
+            return TaskResult(
+                intent=intent,
+                status=TaskStatus.ERROR,
+                query_result=None,
+                error_message=exc.inner_message,
+                raw_question=question,
+                trace=traces,
+            )
+        if probe_affected is not None and probe_affected > 1 and not force:
+            return TaskResult(
+                intent=intent,
+                status=TaskStatus.UNSUPPORTED,
+                query_result=None,
+                error_message=f"Wide update/delete would affect {probe_affected} rows; use --force or narrow WHERE.",
+                raw_question=question,
+                trace=traces,
+            )
+
+    final_dry_run = user_dry_run or (probe_affected is not None and probe_affected > 1 and not force)
 
     try:
-        affected, last_row_id = ctx.db_handle.execute_write(gen.sql, dry_run=use_dry_run, require_where=require_where)
+        affected, last_row_id = ctx.db_handle.execute_write(
+            gen.sql,
+            dry_run=final_dry_run,
+            require_where=require_where,
+        )
     except DbExecutionError as exc:
         return TaskResult(
             intent=intent,
@@ -842,12 +880,16 @@ def run_write_query(
     traces.append(
         StepTrace(
             name="execute_write",
-            output_preview=f"affected_rows={affected}, dry_run={use_dry_run}",
+            output_preview=f"affected_rows={affected}, dry_run={final_dry_run}",
+            severity=SeverityLevel.WARNING if (affected > 1 and not final_dry_run and is_update_or_delete) else SeverityLevel.INFO,
+            notes="multi-row commit with force" if (affected > 1 and not final_dry_run and force) else None,
         )
     )
 
-    state = "Dry-run" if use_dry_run else "Committed"
+    state = "Dry-run" if final_dry_run else "Committed"
     summary_parts = [f"{state}: {affected} row(s) affected"]
+    if probe_affected is not None and final_dry_run and probe_affected != affected:
+        summary_parts.append(f"probe_rows={probe_affected}")
     if last_row_id and affected > 0:
         summary_parts.append(f"last_row_id={last_row_id}")
     summary = "; ".join(summary_parts)
@@ -868,7 +910,13 @@ def run_write_query(
     )
 
 
-def run_task(question: str, ctx: AgentContext) -> TaskResult:
+def run_task(
+    question: str,
+    ctx: AgentContext,
+    *,
+    dry_run_override: bool | None = None,
+    force: bool = False,
+) -> TaskResult:
     traces: list[StepTrace] = []
     budget = TokenBudget(
         max_step_tokens=ctx.config.max_prompt_tokens,
@@ -900,7 +948,15 @@ def run_task(question: str, ctx: AgentContext) -> TaskResult:
         return run_read_query(question, ctx, intent, traces, budget)
 
     if intent == IntentType.WRITE:
-        return run_write_query(question, ctx, intent, traces, budget)
+        return run_write_query(
+            question,
+            ctx,
+            intent,
+            traces,
+            budget,
+            dry_run=dry_run_override,
+            force=force,
+        )
 
     return TaskResult(
         intent=intent,

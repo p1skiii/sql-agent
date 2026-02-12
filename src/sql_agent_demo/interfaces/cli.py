@@ -282,7 +282,12 @@ def main() -> None:
 
     # Default: single question mode.
     try:
-        result = run_task(question=args.question, ctx=ctx)
+        result = run_task(
+            question=args.question,
+            ctx=ctx,
+            dry_run_override=getattr(args, "dry_run", None),
+            force=bool(getattr(args, "force", False)),
+        )
     except (SqlGuardViolation, DbExecutionError) as exc:
         print(f"[ERROR] {exc}", file=sys.stderr)
         sys.exit(1)
