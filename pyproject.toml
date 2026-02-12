@@ -12,6 +12,7 @@ dependencies = [
     "pyyaml>=6.0",
     "sqlalchemy>=2.0",
     "pydantic>=2.7",
+    "flask>=3.0",
 ]
 
 [project.optional-dependencies]

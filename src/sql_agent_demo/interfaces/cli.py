@@ -5,7 +5,6 @@ import argparse
 import sys
 from typing import Iterable
 import math
-import json
 from pathlib import Path
 
 from sql_agent_demo.core.models import (
@@ -25,6 +24,7 @@ from sql_agent_demo.infra.env import load_env_file
 from sql_agent_demo.infra.llm_provider import build_models
 from sql_agent_demo.infra.logging import setup_logging
 from sql_agent_demo.interfaces.dataset import load_query_file
+from sql_agent_demo.interfaces.serialization import result_to_json
 
 
 def _add_shared_arguments(parser: argparse.ArgumentParser) -> None:
@@ -170,71 +170,6 @@ def _print_cost(trace_steps: list[StepTrace]) -> None:
     print("Cost: " + ", ".join(parts))
 
 
-def _extract_affected(trace_steps: list[StepTrace]) -> tuple[int | None, bool | None]:
-    import re
-
-    affected = None
-    dry_run = None
-    for step in trace_steps:
-        if step.name in ("execute_write", "execute_write_probe") and step.output_preview:
-            m = re.search(r"affected_rows=(\\d+)", step.output_preview)
-            if m:
-                affected = int(m.group(1))
-            m2 = re.search(r"dry_run=(true|false)", step.output_preview, flags=re.IGNORECASE)
-            if m2:
-                dry_run = m2.group(1).lower() == "true"
-    return affected, dry_run
-
-
-def _diagnose(result) -> dict:
-    msg = (result.error_message or "").lower()
-    diagnosis = {"category": "UNKNOWN", "action": "inspect", "evidence": result.error_message}
-    if "where clause" in msg or "wide update" in msg:
-        diagnosis = {"category": "GUARD", "action": "narrow_where", "evidence": result.error_message}
-    elif "not null constraint" in msg or "foreign key" in msg:
-        diagnosis = {"category": "DB_CONSTRAINT", "action": "add_required_fields", "evidence": result.error_message}
-    elif "failed to generate" in msg or "refused" in msg:
-        diagnosis = {"category": "LLM_SQL_INVALID", "action": "rephrase_request", "evidence": result.error_message}
-    elif result.status.name == "UNSUPPORTED":
-        diagnosis = {"category": "GUARD", "action": "review_policy", "evidence": result.error_message}
-    elif result.status.name == "ERROR":
-        diagnosis = {"category": "EXECUTION_ERROR", "action": "check_stack", "evidence": result.error_message}
-    return diagnosis
-
-
-def _result_to_json(result, show_sql: bool) -> dict:
-    trace_steps = result.trace or (result.query_result.trace if result.query_result else None) or []
-    affected_rows, dry_run = _extract_affected(trace_steps)
-    obj = {
-        "ok": result.status == TaskStatus.SUCCESS,
-        "mode": "WRITE" if result.intent == IntentType.WRITE else "READ",
-        "question": result.raw_question,
-        "status": result.status.value,
-        "sql": (result.query_result.sql if result.query_result and show_sql else None),
-        "summary": result.query_result.summary if result.query_result else None,
-        "error_code": result.status.value if result.status != TaskStatus.SUCCESS else None,
-        "reason": result.error_message,
-        "affected_rows": affected_rows,
-        "dry_run": dry_run,
-        "trace": [
-            {
-                "name": step.name,
-                "duration_ms": step.duration_ms,
-                "prompt_tokens": step.prompt_tokens,
-                "completion_tokens": step.completion_tokens,
-                "total_tokens": step.total_tokens,
-                "notes": step.notes,
-                "severity": step.severity.value if step.severity else None,
-                "preview": step.output_preview,
-            }
-            for step in trace_steps
-        ],
-    }
-    if result.status != TaskStatus.SUCCESS:
-        obj["diagnosis"] = _diagnose(result)
-    return obj
-
-
 def _print_result(result, show_trace: bool, show_sql: bool, json_mode: bool = False, log_file: str | None = None) -> int:
     trace_steps = result.trace or (result.query_result.trace if result.query_result else None) or []
     exit_code = 0
@@ -244,12 +179,15 @@ def _print_result(result, show_trace: bool, show_sql: bool, json_mode: bool = Fa
         exit_code = 1
 
     if json_mode or log_file:
-        payload = _result_to_json(result, show_sql)
+        payload = result_to_json(result, show_sql)
         line = json.dumps(payload, ensure_ascii=False)
         if json_mode:
             print(line)
         if log_file:
-            Path(log_file).write_text(line + "\n", encoding="utf-8")
+            path = Path(log_file)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as f:
+                f.write(line + "\n")
         return exit_code
     if result.raw_question:
         print(f"Question: {result.raw_question}")
@@ -335,7 +273,13 @@ def main() -> None:
             dry_run=dry_run,
             force=force,
         )
-        code = _print_result(result, show_trace=args.allow_trace, show_sql=args.show_sql)
+        code = _print_result(
+            result,
+            show_trace=args.allow_trace,
+            show_sql=args.show_sql,
+            json_mode=getattr(args, "json_mode", False),
+            log_file=getattr(args, "log_file", None),
+        )
         sys.exit(code)
 
     if args.command == "run-file":
@@ -380,7 +324,13 @@ def main() -> None:
         print(f"[ERROR] {exc}", file=sys.stderr)
         sys.exit(1)
 
-    exit_code = _print_result(result, show_trace=args.allow_trace, show_sql=args.show_sql)
+    exit_code = _print_result(
+        result,
+        show_trace=args.allow_trace,
+        show_sql=args.show_sql,
+        json_mode=getattr(args, "json_mode", False),
+        log_file=getattr(args, "log_file", None),
+    )
     sys.exit(exit_code)
 
 
