@@ -1,0 +1,7 @@
+queries:
+  - name: list-students
+    question: "List all students"
+  - name: cs-students
+    question: "List students majoring in Computer Science"
+  - name: physics-courses
+    question: "Show all course titles and instructors"

@@ -1,0 +1,697 @@
+"""SQL agent pipelines for read-only queries."""
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from typing import Any
+import re
+import time
+
+from .intent import detect_intent
+from .models import (
+    AgentContext,
+    DbExecutionError,
+    IntentType,
+    QueryResult,
+    SelfCheckResult,
+    SeverityLevel,
+    StepTrace,
+    TaskResult,
+    TaskStatus,
+)
+from .safety import validate_readonly_sql
+from .summarizer import summarize
+
+
+@dataclass
+class SqlGenerationResult:
+    sql: str
+    tables: list[str] | None = None
+    assumptions: str | None = None
+
+
+def _preview(text: str, limit: int = 200) -> str:
+    return text if len(text) <= limit else f"{text[:limit]}..."
+
+
+def _metric_fields(metrics: dict[str, Any] | None) -> dict[str, Any]:
+    metrics = metrics or {}
+    return {
+        "duration_ms": metrics.get("duration_ms"),
+        "prompt_tokens": metrics.get("prompt_tokens"),
+        "completion_tokens": metrics.get("completion_tokens"),
+        "total_tokens": metrics.get("total_tokens"),
+    }
+
+
+def _last_metrics(model: Any) -> dict[str, Any] | None:
+    metrics = getattr(model, "last_metrics", None)
+    return metrics if isinstance(metrics, dict) else None
+
+
+@dataclass
+class TokenBudget:
+    max_step_tokens: int | None
+    max_total_tokens: int | None
+    total_tokens: int = 0
+
+    def record(self, metrics: dict[str, Any] | None, step: str) -> str | None:
+        if not metrics:
+            return None
+        step_total = metrics.get("total_tokens")
+        if step_total is None and metrics.get("prompt_tokens") is not None and metrics.get("completion_tokens") is not None:
+            step_total = metrics["prompt_tokens"] + metrics["completion_tokens"]
+
+        if self.max_step_tokens and step_total and step_total > self.max_step_tokens:
+            return f"Token budget exceeded at {step}: total_tokens={step_total} > max_step_tokens={self.max_step_tokens}"
+
+        if step_total:
+            self.total_tokens += step_total
+
+        if self.max_total_tokens and self.total_tokens > self.max_total_tokens:
+            return f"Token budget exceeded: accumulated_tokens={self.total_tokens} > max_total_tokens={self.max_total_tokens}"
+        return None
+
+
+def _compress_schema_line(line: str) -> str:
+    """Format 'table: col, col2' into 'table(col, col2, ...)' keeping all columns."""
+    if ":" not in line:
+        return line.strip()
+    table, cols_text = line.split(":", 1)
+    cols = [col.strip() for col in cols_text.split(",") if col.strip()]
+
+    inner = ", ".join([col.split("(", 1)[0].strip() for col in cols])
+    return f"{table.strip()}({inner})"
+
+
+def select_schema_subset(question: str, full_schema: str, top_k: int = 3, max_columns: int = 4) -> str:
+    """Return a lightweight schema slice most relevant to the question."""
+    lines = [line.strip() for line in full_schema.splitlines() if line.strip()]
+    if not lines:
+        return full_schema
+
+    tokens = [t for t in re.split(r"[^a-zA-Z0-9_]+", question.lower()) if t]
+    scored: list[tuple[int, int, str]] = []
+    for idx, line in enumerate(lines):
+        score = sum(1 for token in tokens if token and token in line.lower())
+        scored.append((score, idx, line))
+
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    selected = [line for score, _, line in scored if score > 0][:top_k]
+    if not selected:
+        selected = lines[:top_k]
+
+    compressed = [_compress_schema_line(line) for line in selected]
+    return "\n".join(compressed)
+
+
+def _generate_sql_with_llm(
+    question: str, schema_snippet: str, model: Any, top_k: int, strict: bool = False
+) -> SqlGenerationResult | None:
+    system_prompt = (
+        "You are an expert SQL assistant. Generate a single SQL query that answers the user's question. "
+        "Rules: only output one SELECT statement; do not include any write operations (INSERT, UPDATE, DELETE, DROP, "
+        "ALTER, TRUNCATE, CREATE). If the request is not read-only, respond with ONLY_READ_ONLY_SUPPORTED. "
+        "Do not fabricate columns or return hard-coded placeholder values; always select real columns such as instructor when asked. "
+        "Respond ONLY with JSON: {\"sql\": \"...\", \"tables\": [\"...\"], \"assumptions\": \"...\"}."
+    )
+    if strict:
+        system_prompt += " Never use NULL or string literals with AS column aliases; use existing columns only."
+    user_prompt = (
+        f"Database schema (top {top_k} tables/columns):\n{schema_snippet}\n\n"
+        f"Question: {question}\nReturn only JSON."
+    )
+
+    payload = model.generate_json(
+        [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+    )
+
+    if not isinstance(payload, dict):
+        return None
+
+    sql_text = str(payload.get("sql", "")).strip()
+    if not sql_text:
+        return None
+
+    text = sql_text
+    if "```" in text:
+        parts = text.split("```")
+        if len(parts) >= 2:
+            text = parts[1].strip()
+        text = text.replace("sql", "", 1).strip() if text.lower().startswith("sql") else text
+
+    tables = payload.get("tables")
+    if tables is not None and not isinstance(tables, list):
+        tables = None
+
+    assumptions = payload.get("assumptions")
+    assumptions = str(assumptions) if assumptions is not None else None
+
+    return SqlGenerationResult(sql=text, tables=tables, assumptions=assumptions)
+
+
+def _needs_llm_summary(question: str) -> bool:
+    text = question.lower()
+    return any(trigger in text for trigger in ("explain", "why", "reason", "interpret", "summarize", "insight"))
+
+
+def _has_constant_projection(sql: str, column: str) -> bool:
+    """Detect constant projections like 'x' AS column or NULL AS column."""
+    pattern = re.compile(
+        rf"(?:'[^']*'|\"[^\"]*\"|NULL)\s+AS\s+{re.escape(column)}\b", re.IGNORECASE
+    )
+    return bool(pattern.search(sql))
+
+
+def _schema_has_column(full_schema: str, column: str) -> bool:
+    col_l = column.lower()
+    for line in full_schema.splitlines():
+        parts = line.split(":")
+        if len(parts) < 2:
+            continue
+        cols_part = parts[1]
+        cols = [c.strip().lower() for c in cols_part.split(",") if c.strip()]
+        if col_l in cols:
+            return True
+    return False
+
+
+DEFAULT_PROJECTIONS: dict[str, list[str]] = {
+    "students": ["name"],
+    "courses": ["title", "instructor"],
+}
+
+
+def _should_allow_all_columns(question: str) -> bool:
+    text = question.lower()
+    return any(
+        phrase in text
+        for phrase in (
+            "all columns",
+            "full details",
+            "full info",
+            "everything",
+            "every column",
+            "all fields",
+        )
+    )
+
+
+def _shape_sql(sql: str, question: str, default_limit: int) -> tuple[str, str | None]:
+    """Apply projection and LIMIT shaping. Returns (sql, note)."""
+    note = None
+    shaped = sql
+    allow_all = _should_allow_all_columns(question)
+
+    table_match = re.search(r"\bfrom\s+([a-zA-Z_][\w]*)", sql, flags=re.IGNORECASE)
+    table = table_match.group(1) if table_match else None
+    projection = DEFAULT_PROJECTIONS.get(table.lower()) if table else None
+
+    select_match = re.match(r"\s*select\s+(distinct\s+)?(.+?)\s+from\s+", sql, flags=re.IGNORECASE | re.DOTALL)
+    if select_match and projection and not allow_all:
+        body = select_match.group(2).strip()
+        body_lower = body.lower()
+        table_variants = [f"{table}.*", f'"{table}".*', f"`{table}`.*", "*"] if table else ["*"]
+        if body_lower in table_variants:
+            new_body = ", ".join([f"{table}.{c}" if table else c for c in projection])
+            shaped = sql.replace(body, new_body, 1)
+            note = f"projection shaped to {', '.join(projection)}"
+
+    if default_limit and re.search(r"\blimit\b", shaped, flags=re.IGNORECASE) is None:
+        shaped = shaped.rstrip().rstrip(";")
+        shaped = f"{shaped} LIMIT {default_limit}"
+        note = (note + "; " if note else "") + f"limit {default_limit}"
+
+    return shaped, note
+
+
+def _llm_summarize(
+    question: str,
+    columns: list[str],
+    rows: list[Sequence[Any]],
+    model: Any,
+    max_summary_tokens: int | None,
+    budget: TokenBudget | None,
+) -> tuple[str | None, dict[str, Any] | None, str | None]:
+    """Return (summary, metrics, error_reason) using LLM, or (None, metrics, reason) on skip/fallback."""
+    sample_limit = min(len(rows), 3)
+    sample_rows = rows[:sample_limit]
+    compact_rows = []
+    for row in sample_rows:
+        compact_rows.append({col: row[idx] for idx, col in enumerate(columns)})
+
+    system_prompt = (
+        "Provide a concise English answer to the user's question based on the provided rows. "
+        "Keep it under two sentences. Do not repeat the SQL."
+    )
+    user_payload = {
+        "question": question,
+        "row_count": len(rows),
+        "columns": columns,
+        "sample_rows": compact_rows,
+    }
+
+    text = model.generate(
+        [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": json.dumps(user_payload)},
+        ]
+    )
+    metrics = _last_metrics(model)
+
+    if budget:
+        err = budget.record(metrics, "llm_summary")
+        if err:
+            return None, metrics, err
+
+    if max_summary_tokens and metrics and metrics.get("total_tokens") and metrics["total_tokens"] > max_summary_tokens:
+        return None, metrics, f"summary tokens {metrics['total_tokens']} exceed max {max_summary_tokens}"
+
+    return text.strip(), metrics, None
+
+
+def _selfcheck_sql(question: str, sql: str, model: Any | None) -> SelfCheckResult:
+    if model is None:
+        return SelfCheckResult(
+            is_readonly=True,
+            is_relevant=True,
+            risk_level=SeverityLevel.INFO,
+            notes="selfcheck disabled",
+            passed=True,
+        )
+
+    payload = model.generate_json(
+        [
+            {
+                "role": "system",
+                "content": (
+                    "Review the SQL for safety and relevance. Respond ONLY in JSON with fields: "
+                    '{"pass": bool, "reason": "...", "fix_hint": "...", "confidence": 0-1, '
+                    '"is_readonly": bool, "is_relevant": bool, "risk_level": "INFO"|"WARNING"|"DANGER"}.'
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps({"question": question, "sql": sql}),
+            },
+        ]
+    )
+    if not isinstance(payload, dict):
+        payload = {}
+
+    risk_level = str(payload.get("risk_level", SeverityLevel.WARNING)).upper()
+    try:
+        severity = SeverityLevel(risk_level)
+    except ValueError:
+        severity = SeverityLevel.WARNING
+
+    reason = payload.get("reason") or payload.get("notes", "")
+    fix_hint = payload.get("fix_hint") or ""
+    confidence = payload.get("confidence")
+    pass_flag = payload.get("pass")
+
+    note_parts = []
+    if reason:
+        note_parts.append(str(reason))
+    if fix_hint:
+        note_parts.append(f"fix_hint: {fix_hint}")
+    if confidence is not None:
+        note_parts.append(f"confidence={confidence}")
+    if pass_flag is not None:
+        note_parts.append(f"pass={pass_flag}")
+    notes = "; ".join(note_parts)
+
+    return SelfCheckResult(
+        is_readonly=bool(payload.get("is_readonly", False)),
+        is_relevant=bool(payload.get("is_relevant", True)),
+        risk_level=severity,
+        notes=notes,
+        passed=bool(pass_flag) if pass_flag is not None else True,
+        reason=str(reason) if reason else None,
+        fix_hint=str(fix_hint) if fix_hint else None,
+        confidence=float(confidence) if isinstance(confidence, (int, float)) else None,
+    )
+
+
+def repair_sql(question: str, sql: str, error_message: str, schema_snippet: str, model: Any) -> str | None:
+    """Attempt a single-shot SQL repair via LLM JSON output."""
+    payload = model.generate_json(
+        [
+            {
+                "role": "system",
+                "content": (
+                    "You are fixing a SQL query that failed to execute. Return ONLY JSON: "
+                    '{"sql": "...", "reason": "..."} with a corrected SELECT-only statement.'
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "question": question,
+                        "failed_sql": sql,
+                        "error": error_message,
+                        "schema": schema_snippet,
+                    }
+                ),
+            },
+        ]
+    )
+
+    if not isinstance(payload, dict):
+        return None
+
+    new_sql = str(payload.get("sql", "")).strip()
+    if not new_sql:
+        return None
+
+    text = new_sql
+    if "```" in text:
+        parts = text.split("```")
+        if len(parts) >= 2:
+            text = parts[1].strip()
+        text = text.replace("sql", "", 1).strip() if text.lower().startswith("sql") else text
+
+    return text
+
+
+def run_read_query(
+    question: str,
+    ctx: AgentContext,
+    intent: IntentType,
+    traces: list[StepTrace] | None = None,
+    budget: TokenBudget | None = None,
+) -> TaskResult:
+    traces = traces or []
+    budget = budget or TokenBudget(
+        max_step_tokens=ctx.config.max_prompt_tokens,
+        max_total_tokens=ctx.config.max_total_tokens,
+    )
+
+    full_schema = ctx.db_handle.get_table_info()
+    max_cols = 3 if intent == IntentType.READ_SIMPLE else 5
+    schema_snippet = select_schema_subset(question, full_schema, ctx.config.top_k, max_columns=max_cols)
+    traces.append(StepTrace(name="load_schema", output_preview=_preview(schema_snippet)))
+
+    attempted_strict = False
+    while True:
+        gen = _generate_sql_with_llm(
+            question,
+            schema_snippet,
+            ctx.sql_model,
+            ctx.config.top_k,
+            strict=attempted_strict,
+        )
+        if not gen:
+            return TaskResult(
+                intent=intent,
+                status=TaskStatus.UNSUPPORTED,
+                query_result=None,
+                error_message="Model refused to generate a read-only SQL query.",
+                raw_question=question,
+                trace=traces,
+            )
+        shaped_sql, shape_note = _shape_sql(gen.sql, question, ctx.config.sql_default_limit)
+        if shape_note:
+            traces.append(StepTrace(name="shape_sql", output_preview=_preview(shaped_sql), notes=shape_note))
+        gen.sql = shaped_sql
+        gen_metrics = _last_metrics(ctx.sql_model)
+        traces.append(
+            StepTrace(
+                name="generate_sql",
+                output_preview=_preview(gen.sql),
+                **_metric_fields(gen_metrics),
+            )
+        )
+        err = budget.record(gen_metrics, "generate_sql")
+        if err:
+            return TaskResult(
+                intent=intent,
+                status=TaskStatus.ERROR,
+                query_result=None,
+                error_message=err,
+                raw_question=question,
+                trace=traces,
+        )
+
+        wants_instructor = any(word in question.lower() for word in ("instructor", "teacher", "professor"))
+        schema_has_instructor = _schema_has_column(full_schema, "instructor")
+        fabricated_instructor = (
+            wants_instructor and schema_has_instructor and _has_constant_projection(gen.sql, "instructor")
+        )
+        if fabricated_instructor:
+            traces.append(
+                StepTrace(
+                    name="faithfulness_check",
+                    output_preview="constant projection to instructor detected; retrying with strict schema",
+                    severity=SeverityLevel.WARNING,
+                )
+            )
+            if attempted_strict:
+                return TaskResult(
+                    intent=intent,
+                    status=TaskStatus.ERROR,
+                    query_result=None,
+                    error_message="SQL appears to fabricate instructor values.",
+                    raw_question=question,
+                    trace=traces,
+                )
+            attempted_strict = True
+            continue
+        break
+
+    sc: SelfCheckResult
+    if ctx.config.selfcheck_enabled:
+        sc = _selfcheck_sql(question, gen.sql, ctx.sql_model)
+        traces.append(
+            StepTrace(
+                name="selfcheck",
+                output_preview=_preview(
+                    f"is_readonly={sc.is_readonly}, is_relevant={sc.is_relevant}, risk_level={sc.risk_level}"
+                ),
+                severity=sc.risk_level,
+                notes=sc.notes or None,
+                **_metric_fields(_last_metrics(ctx.sql_model)),
+            )
+        )
+        err = budget.record(_last_metrics(ctx.sql_model), "selfcheck")
+        if err:
+            return TaskResult(
+                intent=intent,
+                status=TaskStatus.ERROR,
+                query_result=None,
+                error_message=err,
+                raw_question=question,
+                trace=traces,
+            )
+    else:
+        sc = SelfCheckResult(
+            is_readonly=True,
+            is_relevant=True,
+            risk_level=SeverityLevel.INFO,
+            notes="selfcheck disabled",
+            passed=True,
+        )
+
+    if ctx.config.selfcheck_enabled and not sc.passed:
+        return TaskResult(
+            intent=intent,
+            status=TaskStatus.UNSUPPORTED,
+            query_result=None,
+            error_message=sc.reason or sc.notes or "SQL failed selfcheck.",
+            raw_question=question,
+            trace=traces,
+        )
+
+    validate_readonly_sql(gen.sql)
+
+    try:
+        columns, all_rows = ctx.db_handle.execute_select(gen.sql)
+    except DbExecutionError as exc:
+        repair_sql_text = repair_sql(question, gen.sql, exc.inner_message, schema_snippet, ctx.sql_model)
+        if not repair_sql_text:
+            return TaskResult(
+                intent=intent,
+                status=TaskStatus.ERROR,
+                query_result=None,
+                error_message="Failed to repair SQL.",
+                raw_question=question,
+                trace=traces,
+            )
+
+        validate_readonly_sql(repair_sql_text)
+        traces.append(
+            StepTrace(
+                name="repair_sql",
+                output_preview=_preview(repair_sql_text),
+                **_metric_fields(_last_metrics(ctx.sql_model)),
+            )
+        )
+        err = budget.record(_last_metrics(ctx.sql_model), "repair_sql")
+        if err:
+            return TaskResult(
+                intent=intent,
+                status=TaskStatus.ERROR,
+                query_result=None,
+                error_message=err,
+                raw_question=question,
+                trace=traces,
+            )
+
+        if ctx.config.selfcheck_enabled:
+            sc2 = _selfcheck_sql(question, repair_sql_text, ctx.sql_model)
+            traces.append(
+                StepTrace(
+                    name="selfcheck_after_repair",
+                    output_preview=_preview(
+                        f"is_readonly={sc2.is_readonly}, is_relevant={sc2.is_relevant}, risk_level={sc2.risk_level}"
+                    ),
+                    severity=sc2.risk_level,
+                    notes=sc2.notes or None,
+                    **_metric_fields(_last_metrics(ctx.sql_model)),
+                )
+            )
+            err = budget.record(_last_metrics(ctx.sql_model), "selfcheck_after_repair")
+            if err:
+                return TaskResult(
+                    intent=intent,
+                    status=TaskStatus.ERROR,
+                    query_result=None,
+                    error_message=err,
+                    raw_question=question,
+                    trace=traces,
+                )
+            if not sc2.passed:
+                return TaskResult(
+                    intent=intent,
+                    status=TaskStatus.UNSUPPORTED,
+                    query_result=None,
+                    error_message=sc2.reason or sc2.notes or "SQL failed selfcheck after repair.",
+                    raw_question=question,
+                    trace=traces,
+                )
+        try:
+            columns, all_rows = ctx.db_handle.execute_select(repair_sql_text)
+            gen.sql = repair_sql_text
+        except DbExecutionError:
+            return TaskResult(
+                intent=intent,
+                status=TaskStatus.ERROR,
+                query_result=None,
+                error_message="Failed to execute repaired SQL.",
+                raw_question=question,
+                trace=traces,
+            )
+
+    row_count = len(all_rows)
+    max_rows = ctx.config.max_rows or 20
+    rows = all_rows[:max_rows]
+    traces.append(StepTrace(name="execute_sql", output_preview=f"row_count={row_count}"))
+
+    use_llm_summary = (
+        ctx.config.allow_llm_summary
+        and row_count <= ctx.config.max_summary_rows
+        and _needs_llm_summary(question)
+    )
+
+    summary = summarize(question, columns, rows)
+    if use_llm_summary:
+        llm_summary, metrics, reason = _llm_summarize(
+            question,
+            list(columns),
+            list(rows),
+            ctx.sql_model,
+            ctx.config.max_summary_tokens,
+            budget,
+        )
+        if llm_summary:
+            summary = llm_summary
+        traces.append(
+            StepTrace(
+                name="summarize",
+                output_preview=_preview(summary if llm_summary else f"llm fallback -> {summary}"),
+                **_metric_fields(metrics),
+                notes=reason,
+            )
+        )
+    else:
+        skip_reason = None
+        if row_count > ctx.config.max_summary_rows:
+            skip_reason = f"skipped llm summary (row_count={row_count} > max={ctx.config.max_summary_rows})"
+        traces.append(
+            StepTrace(
+                name="summarize",
+                output_preview=_preview(summary),
+                notes=skip_reason,
+            )
+        )
+
+    return TaskResult(
+        intent=intent,
+        status=TaskStatus.SUCCESS,
+        query_result=QueryResult(
+            sql=gen.sql,
+            columns=list(columns),
+            rows=list(rows),
+            summary=summary,
+            trace=traces if ctx.config.allow_trace else None,
+        ),
+        error_message=None,
+        raw_question=question,
+        trace=traces,
+    )
+
+
+def run_task(question: str, ctx: AgentContext) -> TaskResult:
+    traces: list[StepTrace] = []
+    budget = TokenBudget(
+        max_step_tokens=ctx.config.max_prompt_tokens,
+        max_total_tokens=ctx.config.max_total_tokens,
+    )
+
+    intent = detect_intent(question, ctx.intent_model)
+    intent_metrics = _last_metrics(ctx.intent_model)
+    traces.append(
+        StepTrace(
+            name="intent_detection",
+            input_preview=_preview(question),
+            output_preview=intent.value,
+            **_metric_fields(intent_metrics),
+        )
+    )
+    err = budget.record(intent_metrics, "intent_detection")
+    if err:
+        return TaskResult(
+            intent=intent,
+            status=TaskStatus.ERROR,
+            query_result=None,
+            error_message=err,
+            raw_question=question,
+            trace=traces,
+        )
+
+    if intent in (IntentType.READ_SIMPLE, IntentType.READ_ANALYTIC):
+        return run_read_query(question, ctx, intent, traces, budget)
+
+    return TaskResult(
+        intent=intent,
+        status=TaskStatus.UNSUPPORTED,
+        query_result=None,
+        error_message="Only read-only SELECT queries are supported in this demo.",
+        raw_question=question,
+        trace=traces,
+    )
+
+
+__all__ = [
+    "SqlGenerationResult",
+    "select_schema_subset",
+    "_generate_sql_with_llm",
+    "_selfcheck_sql",
+    "repair_sql",
+    "run_read_query",
+    "run_task",
+]
