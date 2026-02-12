@@ -72,6 +72,16 @@ def validate_write_sql(sql: str, require_where: bool = True) -> None:
             raise SqlGuardViolation(sql, "UPDATE/DELETE must include a WHERE clause.")
         if re.search(r"\bwhere\s+1\s*=\s*1\b", lowered, flags=re.IGNORECASE):
             raise SqlGuardViolation(sql, "WHERE clause is too broad (tautology detected).")
+        # Require at least one comparison operator to a literal/parameter to avoid blanket predicates like "WHERE gpa IS NOT NULL"
+        where_part = lowered.split("where", 1)[1]
+        has_operator = bool(
+            re.search(r"(=| in \(| like\b| between\b|<|>|<=|>=|!=)", where_part, flags=re.IGNORECASE)
+        )
+        has_is_null = re.search(r"\bis\s+not\s+null\b", where_part, flags=re.IGNORECASE)
+        if not has_operator and has_is_null:
+            raise SqlGuardViolation(sql, "WHERE clause is too broad (lacks specific filters).")
+        if not has_operator and not has_is_null:
+            raise SqlGuardViolation(sql, "WHERE clause must include a specific filter condition.")
 
     table_match = re.match(r"\s*(insert\s+into|update|delete\s+from)\s+([a-zA-Z_][\\w]*)", lowered, flags=re.IGNORECASE)
     if not table_match:
