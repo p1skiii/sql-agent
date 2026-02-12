@@ -366,6 +366,17 @@ def _llm_summarize(
     return text.strip(), metrics, None
 
 
+def _action_from_sql(sql: str) -> str:
+    lowered = sql.strip().lower()
+    if lowered.startswith("insert"):
+        return "insert"
+    if lowered.startswith("delete"):
+        return "delete"
+    if lowered.startswith("update"):
+        return "update"
+    return "write"
+
+
 def _selfcheck_sql(question: str, sql: str, model: Any | None) -> SelfCheckResult:
     if model is None:
         return SelfCheckResult(
@@ -830,8 +841,7 @@ def run_write_query(
 
     # Always probe updates/deletes to detect wide impact
     probe_affected = None
-    probe_needed = is_update_or_delete and (not user_dry_run or force)
-    if probe_needed:
+    if is_update_or_delete:
         try:
             probe_affected, _ = ctx.db_handle.execute_write(gen.sql, dry_run=True, require_where=require_where)
             traces.append(
@@ -859,7 +869,7 @@ def run_write_query(
                 trace=traces,
             )
 
-    final_dry_run = user_dry_run or (probe_affected is not None and probe_affected > 1 and not force)
+    final_dry_run = user_dry_run
 
     try:
         affected, last_row_id = ctx.db_handle.execute_write(
@@ -881,18 +891,31 @@ def run_write_query(
         StepTrace(
             name="execute_write",
             output_preview=f"affected_rows={affected}, dry_run={final_dry_run}",
-            severity=SeverityLevel.WARNING if (affected > 1 and not final_dry_run and is_update_or_delete) else SeverityLevel.INFO,
+            severity=SeverityLevel.WARNING
+            if (affected > 1 and not final_dry_run and is_update_or_delete)
+            else SeverityLevel.INFO,
             notes="multi-row commit with force" if (affected > 1 and not final_dry_run and force) else None,
         )
     )
 
-    state = "Dry-run" if final_dry_run else "Committed"
-    summary_parts = [f"{state}: {affected} row(s) affected"]
+    action = _action_from_sql(gen.sql)
+    if action == "delete":
+        if final_dry_run:
+            summary = f"Dry-run: would delete {affected} row(s)"
+        else:
+            summary = f"Deleted {affected} row(s)"
+    elif action == "update":
+        if final_dry_run:
+            summary = f"Dry-run: would update {affected} row(s)"
+        else:
+            summary = f"Updated {affected} row(s)"
+    else:
+        state = "Dry-run" if final_dry_run else "Committed"
+        summary = f"{state}: {affected} row(s) affected"
+        if last_row_id and affected > 0:
+            summary = f"{summary}; last_row_id={last_row_id}"
     if probe_affected is not None and final_dry_run and probe_affected != affected:
-        summary_parts.append(f"probe_rows={probe_affected}")
-    if last_row_id and affected > 0:
-        summary_parts.append(f"last_row_id={last_row_id}")
-    summary = "; ".join(summary_parts)
+        summary = f"{summary} (probe_rows={probe_affected})"
 
     return TaskResult(
         intent=intent,
