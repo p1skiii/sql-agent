@@ -273,6 +273,54 @@ def _shape_sql(sql: str, question: str, default_limit: int) -> tuple[str, str | 
     return shaped, note
 
 
+def _shape_student_insert(sql: str) -> tuple[str, str | None]:
+    """Ensure INSERT into students includes required NOT NULL columns with defaults."""
+    pattern = re.compile(
+        r"insert\s+into\s+students\s*(\(([^)]*)\))?\s*values\s*\(([^)]*)\)",
+        re.IGNORECASE | re.DOTALL,
+    )
+    match = pattern.search(sql)
+    if not match:
+        return sql, None
+
+    cols_part = match.group(2)
+    vals_part = match.group(3)
+    if vals_part is None:
+        return sql, None
+
+    cols = []
+    if cols_part:
+        cols = [c.strip().strip("`\"") for c in cols_part.split(",") if c.strip()]
+    vals = [v.strip() for v in vals_part.split(",")]
+
+    col_to_val = {col.lower(): vals[idx] for idx, col in enumerate(cols) if idx < len(vals)}
+
+    required = ["name", "city", "major", "gpa"]
+    defaults = {
+        "city": "'Unknown'",
+        "major": "'Undeclared'",
+        "gpa": "0.0",
+    }
+
+    shaped_cols: list[str] = []
+    shaped_vals: list[str] = []
+    for col in required:
+        shaped_cols.append(col)
+        if col in col_to_val:
+            shaped_vals.append(col_to_val[col])
+        else:
+            shaped_vals.append(defaults.get(col, "NULL"))
+
+    # Keep original extra columns if any
+    for col, val in col_to_val.items():
+        if col not in required:
+            shaped_cols.append(col)
+            shaped_vals.append(val)
+
+    new_sql = f"INSERT INTO students ({', '.join(shaped_cols)}) VALUES ({', '.join(shaped_vals)})"
+    return new_sql, "added defaults for required student columns"
+
+
 def _llm_summarize(
     question: str,
     columns: list[str],
@@ -740,12 +788,17 @@ def run_write_query(
             trace=traces,
         )
 
+    shape_note = None
+    if "insert into students" in gen.sql.lower():
+        gen.sql, shape_note = _shape_student_insert(gen.sql)
+
     gen_metrics = _last_metrics(ctx.sql_model)
     traces.append(
         StepTrace(
             name="generate_write_sql",
             output_preview=_preview(gen.sql),
             **_metric_fields(gen_metrics),
+            notes=shape_note,
         )
     )
     err = budget.record(gen_metrics, "generate_write_sql")

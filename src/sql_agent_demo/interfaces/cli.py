@@ -36,6 +36,16 @@ def _add_shared_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--selfcheck", dest="selfcheck_enabled", action="store_true", help="Enable SQL selfcheck.")
     parser.add_argument("--allow-write", dest="allow_write", action="store_true", help="Enable write operations.")
     parser.add_argument(
+        "--dry-run",
+        dest="dry_run",
+        type=_bool_arg,
+        nargs="?",
+        const=True,
+        default=None,
+        help="Execute then roll back writes (default). Pass false to commit.",
+    )
+    parser.add_argument("--force", dest="force", action="store_true", help="Skip WHERE requirement (dangerous).")
+    parser.add_argument(
         "--show-sql",
         dest="show_sql",
         action="store_true",
@@ -65,17 +75,7 @@ def _parse_args() -> argparse.Namespace:
     write_parser = subparsers.add_parser("write", help="Run a single write (INSERT/UPDATE/DELETE).")
     write_parser.add_argument("question", type=str, help="Write request in English.")
     _add_shared_arguments(write_parser)
-    write_parser.add_argument(
-        "--dry-run",
-        dest="dry_run",
-        type=_bool_arg,
-        nargs="?",
-        const=True,
-        default=None,
-        help="Execute then roll back (default). Pass false to commit.",
-    )
-    write_parser.add_argument("--force", dest="force", action="store_true", help="Skip WHERE requirement (dangerous).")
-    write_parser.set_defaults(dry_run=None, force=None)
+    write_parser.set_defaults()
 
     argv = sys.argv[1:]
     known_commands = {"ask", "run-file", "write"}
