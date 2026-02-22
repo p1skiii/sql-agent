@@ -3,10 +3,8 @@ from __future__ import annotations
 
 import argparse
 import sys
-import json
 from typing import Iterable
 import math
-import time
 from pathlib import Path
 
 from sql_agent_demo.core.models import (
@@ -40,12 +38,6 @@ def _add_shared_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--selfcheck", dest="selfcheck_enabled", action="store_true", help="Enable SQL selfcheck.")
     parser.add_argument("--allow-write", dest="allow_write", action="store_true", help="Enable write operations.")
     parser.add_argument(
-        "--allow-force",
-        dest="allow_force",
-        action="store_true",
-        help="Permit --force to bypass WHERE/row limits (dangerous).",
-    )
-    parser.add_argument(
         "--dry-run",
         dest="dry_run",
         type=_bool_arg,
@@ -55,20 +47,12 @@ def _add_shared_arguments(parser: argparse.ArgumentParser) -> None:
         help="Execute then roll back writes (default). Pass false to commit.",
     )
     parser.add_argument("--force", dest="force", action="store_true", help="Skip WHERE requirement (dangerous).")
-    parser.add_argument("--apply", dest="apply", action="store_true", help="Commit write (otherwise plan/dry-run).")
     parser.add_argument("--json", dest="json_mode", action="store_true", help="Emit result as single-line JSON.")
     parser.add_argument(
         "--log-file",
         dest="log_file",
         type=str,
         help="Write detailed JSON (including trace) to this file.",
-    )
-    parser.add_argument(
-        "--export",
-        dest="export_path",
-        nargs="?",
-        const="auto",
-        help="Export full run artifact to path (default artifacts/run_<timestamp>.json).",
     )
     parser.add_argument(
         "--show-sql",
@@ -186,15 +170,7 @@ def _print_cost(trace_steps: list[StepTrace]) -> None:
     print("Cost: " + ", ".join(parts))
 
 
-def _print_result(
-    result,
-    show_trace: bool,
-    show_sql: bool,
-    json_mode: bool = False,
-    log_file: str | None = None,
-    export_path: str | None = None,
-    flags: dict | None = None,
-) -> int:
+def _print_result(result, show_trace: bool, show_sql: bool, json_mode: bool = False, log_file: str | None = None) -> int:
     trace_steps = result.trace or (result.query_result.trace if result.query_result else None) or []
     exit_code = 0
     if result.status == TaskStatus.UNSUPPORTED:
@@ -202,8 +178,8 @@ def _print_result(
     elif result.status != TaskStatus.SUCCESS:
         exit_code = 1
 
-    if json_mode or log_file or export_path:
-        payload = result_to_json(result, show_sql, flags=flags)
+    if json_mode or log_file:
+        payload = result_to_json(result, show_sql)
         line = json.dumps(payload, ensure_ascii=False)
         if json_mode:
             print(line)
@@ -212,14 +188,6 @@ def _print_result(
             path.parent.mkdir(parents=True, exist_ok=True)
             with path.open("a", encoding="utf-8") as f:
                 f.write(line + "\n")
-        if export_path:
-            if export_path == "auto":
-                ts = time.strftime("%Y%m%d_%H%M%S")
-                export_path = f"artifacts/run_{ts}.json"
-            path = Path(export_path)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with path.open("w", encoding="utf-8") as f:
-                json.dump(payload, f, ensure_ascii=False, indent=2)
         return exit_code
     if result.raw_question:
         print(f"Question: {result.raw_question}")
@@ -275,7 +243,7 @@ def main() -> None:
         "selfcheck_enabled": args.selfcheck_enabled,
         "allow_write": getattr(args, "allow_write", None),
         "dry_run_default": getattr(args, "dry_run", None),
-        "allow_force": getattr(args, "allow_force", None),
+        "allow_force": getattr(args, "force", None),
     }
 
     config = load_config(overrides)
@@ -297,14 +265,6 @@ def main() -> None:
     if args.command == "write":
         force = bool(getattr(args, "force", False))
         dry_run = getattr(args, "dry_run", None)
-        export_path = getattr(args, "export_path", None)
-        flags = {
-            "allow_write": bool(getattr(args, "allow_write", False)),
-            "allow_force": bool(getattr(args, "allow_force", False)),
-            "dry_run": dry_run,
-            "force": force,
-            "apply": bool(getattr(args, "apply", False)),
-        }
         result = run_write_query(
             question=args.question,
             ctx=ctx,
@@ -312,7 +272,6 @@ def main() -> None:
             traces=[],
             dry_run=dry_run,
             force=force,
-            apply_changes=bool(getattr(args, "apply", False)),
         )
         code = _print_result(
             result,
@@ -320,8 +279,6 @@ def main() -> None:
             show_sql=args.show_sql,
             json_mode=getattr(args, "json_mode", False),
             log_file=getattr(args, "log_file", None),
-            export_path=export_path,
-            flags=flags,
         )
         sys.exit(code)
 
@@ -362,28 +319,17 @@ def main() -> None:
             ctx=ctx,
             dry_run_override=getattr(args, "dry_run", None),
             force=bool(getattr(args, "force", False)),
-            apply_changes=bool(getattr(args, "apply", False)),
         )
     except (SqlGuardViolation, DbExecutionError) as exc:
         print(f"[ERROR] {exc}", file=sys.stderr)
         sys.exit(1)
 
-    export_path = getattr(args, "export_path", None)
-    flags = {
-        "allow_write": bool(getattr(args, "allow_write", False)),
-        "allow_force": bool(getattr(args, "allow_force", False)),
-        "dry_run": getattr(args, "dry_run", None),
-        "force": bool(getattr(args, "force", False)),
-        "apply": bool(getattr(args, "apply", False)),
-    }
     exit_code = _print_result(
         result,
         show_trace=args.allow_trace,
         show_sql=args.show_sql,
         json_mode=getattr(args, "json_mode", False),
         log_file=getattr(args, "log_file", None),
-        export_path=export_path,
-        flags=flags,
     )
     sys.exit(exit_code)
 

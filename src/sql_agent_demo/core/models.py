@@ -79,11 +79,6 @@ class AgentConfig:
     require_where: bool = True
     dry_run_default: bool = True
     allow_force: bool = False
-    write_apply_required: bool = True
-    max_write_rows: int = 1000
-    max_wall_time_ms: int | None = 10000
-    max_trace_chars: int = 20000
-    max_trace_steps: int = 200
 
 
 @dataclass
@@ -123,8 +118,6 @@ class TaskResult:
     query_result: QueryResult | None
     error_message: str | None
     raw_question: str
-    error_code: str | None = None
-    hint: str | None = None
     trace: List[StepTrace] | None = None
 
 
