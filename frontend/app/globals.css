@@ -1,0 +1,31 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  background: radial-gradient(circle at 10% 20%, rgba(79,125,255,0.12), transparent 25%),
+              radial-gradient(circle at 80% 0%, rgba(255,255,255,0.06), transparent 30%),
+              #0b0d12;
+  color: #e8ecf5;
+  min-height: 100vh;
+}
+
+input, button {
+  font: inherit;
+}
+
+.scroll-area {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.2) transparent;
+}
+.scroll-area::-webkit-scrollbar {
+  width: 6px;
+}
+.scroll-area::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.2);
+  border-radius: 999px;
+}

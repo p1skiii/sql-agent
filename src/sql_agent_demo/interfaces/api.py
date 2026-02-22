@@ -35,7 +35,11 @@ def create_app(base_overrides: dict[str, Any] | None = None) -> Flask:
             return jsonify({"ok": False, "error": "question is required"}), 400
 
         overrides = {}
-        for key, field in (("allow_write", "allow_write"), ("dry_run", "dry_run_default"), ("force", "allow_force")):
+        for key, field in (
+            ("allow_write", "allow_write"),
+            ("dry_run", "dry_run_default"),
+            ("allow_force", "allow_force"),
+        ):
             if payload.get(key) is not None:
                 overrides[field] = bool(payload[key]) if key != "dry_run" else payload[key]
 
@@ -52,6 +56,7 @@ def create_app(base_overrides: dict[str, Any] | None = None) -> Flask:
                 ctx=ctx,
                 dry_run_override=payload.get("dry_run"),
                 force=bool(payload.get("force", False)),
+                apply_changes=bool(payload.get("apply", False)),
             )
         except SqlGuardViolation as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Sequence
 import re
 import time
 
@@ -230,6 +230,32 @@ DEFAULT_PROJECTIONS: dict[str, list[str]] = {
 }
 
 
+_KNOWN_FIELD_TOKENS = {
+    "name",
+    "gpa",
+    "city",
+    "major",
+    "id",
+    "email",
+    "address",
+    "salary",
+    "phone",
+}
+
+
+def _parse_schema_columns(full_schema: str) -> set[str]:
+    cols: set[str] = set()
+    for line in full_schema.splitlines():
+        if ":" not in line:
+            continue
+        _, cols_text = line.split(":", 1)
+        for col in cols_text.split(","):
+            col_clean = col.strip().split(" ")[0]
+            if col_clean:
+                cols.add(col_clean.lower())
+    return cols
+
+
 def _should_allow_all_columns(question: str) -> bool:
     text = question.lower()
     return any(
@@ -319,6 +345,72 @@ def _shape_student_insert(sql: str) -> tuple[str, str | None]:
 
     new_sql = f"INSERT INTO students ({', '.join(shaped_cols)}) VALUES ({', '.join(shaped_vals)})"
     return new_sql, "added defaults for required student columns"
+
+
+def _parse_write_shape(sql: str) -> tuple[str | None, str | None, str | None]:
+    """Return (action, table, where_clause) for UPDATE/DELETE."""
+    lowered = sql.strip().lower()
+    if lowered.startswith("update"):
+        match = re.match(
+            r"\s*update\s+([a-zA-Z_][\w]*)\s+set\s+.+?\s+where\s+(.+)",
+            sql,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if match:
+            return "update", match.group(1), match.group(2).strip().rstrip(";")
+    if lowered.startswith("delete"):
+        match = re.match(
+            r"\s*delete\s+from\s+([a-zA-Z_][\w]*)\s+where\s+(.+)",
+            sql,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if match:
+            return "delete", match.group(1), match.group(2).strip().rstrip(";")
+    if lowered.startswith("insert"):
+        match = re.match(r"\s*insert\s+into\s+([a-zA-Z_][\w]*)", sql, flags=re.IGNORECASE)
+        if match:
+            return "insert", match.group(1), None
+    return None, None, None
+
+
+def _format_samples(columns: list[str], rows: list[Sequence[Any]]) -> list[str]:
+    samples: list[str] = []
+    for row in rows:
+        parts = [f"{col}={row[idx]}" for idx, col in enumerate(columns)]
+        samples.append(", ".join(parts))
+    return samples
+
+
+def _collect_samples(ctx: AgentContext, table: str, where_clause: str | None, limit: int = 5) -> list[str]:
+    if not where_clause:
+        return []
+    safe_where = where_clause.split(";")[0].strip()
+    if not safe_where:
+        return []
+    sql = f"SELECT * FROM {table} WHERE {safe_where} LIMIT {limit}"
+    try:
+        cols, rows = ctx.db_handle.execute_select(sql)
+        return _format_samples(cols, list(rows))
+    except DbExecutionError:
+        return []
+
+
+def _requested_fields(question: str) -> set[str]:
+    tokens = set(re.split(r"[^a-zA-Z0-9_]+", question.lower()))
+    return {t for t in tokens if t in _KNOWN_FIELD_TOKENS}
+
+
+def _ensure_requested_fields_present(sql: str, requested: set[str], available: set[str]) -> tuple[str | None, str | None]:
+    if not requested:
+        return sql, None
+    missing = [f for f in requested if f not in available]
+    if missing:
+        return None, f"Requested fields not in schema: {', '.join(missing)}"
+    # If projection is *, shape to include requested fields to ensure they appear in summary.
+    if sql.strip().lower().startswith("select *") or re.search(r"select\\s+\\*\\s+from", sql, flags=re.IGNORECASE):
+        proj = ", ".join(requested)
+        sql = re.sub(r"select\\s+\\*\\s+from", f"SELECT {proj} FROM", sql, flags=re.IGNORECASE)
+    return sql, None
 
 
 def _llm_summarize(
@@ -488,20 +580,34 @@ def run_read_query(
     intent: IntentType,
     traces: list[StepTrace] | None = None,
     budget: TokenBudget | None = None,
+    start_ts: float | None = None,
 ) -> TaskResult:
     traces = traces or []
     budget = budget or TokenBudget(
         max_step_tokens=ctx.config.max_prompt_tokens,
         max_total_tokens=ctx.config.max_total_tokens,
     )
+    start_ts = start_ts or time.perf_counter()
 
     full_schema = ctx.db_handle.get_table_info()
+    available_cols = _parse_schema_columns(full_schema)
     max_cols = 3 if intent == IntentType.READ_SIMPLE else 5
     schema_snippet = select_schema_subset(question, full_schema, ctx.config.top_k, max_columns=max_cols)
     traces.append(StepTrace(name="load_schema", output_preview=_preview(schema_snippet)))
 
     attempted_strict = False
     while True:
+        if ctx.config.max_wall_time_ms and (time.perf_counter() - start_ts) * 1000 > ctx.config.max_wall_time_ms:
+            return TaskResult(
+                intent=intent,
+                status=TaskStatus.ERROR,
+                query_result=None,
+                error_message="Time limit exceeded during planning.",
+                error_code="TIMEOUT",
+                hint="Simplify the question or increase SQL_AGENT_MAX_WALL_MS.",
+                raw_question=question,
+                trace=traces,
+            )
         gen = _generate_sql_with_llm(
             question,
             schema_snippet,
@@ -522,6 +628,30 @@ def run_read_query(
         if shape_note:
             traces.append(StepTrace(name="shape_sql", output_preview=_preview(shaped_sql), notes=shape_note))
         gen.sql = shaped_sql
+
+        # Ensure requested fields are projected when schema supports them
+        requested = _requested_fields(question)
+        enforced_sql, missing_reason = _ensure_requested_fields_present(gen.sql, requested, available_cols)
+        if missing_reason:
+            return TaskResult(
+                intent=intent,
+                status=TaskStatus.UNSUPPORTED,
+                query_result=None,
+                error_message=missing_reason,
+                error_code="SCHEMA_MISSING_COLUMN",
+                hint="Try available columns from schema hints.",
+                raw_question=question,
+                trace=traces,
+            )
+        if enforced_sql and enforced_sql != gen.sql:
+            gen.sql = enforced_sql
+            traces.append(
+                StepTrace(
+                    name="shape_projection",
+                    output_preview=_preview(gen.sql),
+                    notes="ensured requested fields",
+                )
+            )
         gen_metrics = _last_metrics(ctx.sql_model)
         traces.append(
             StepTrace(
@@ -690,6 +820,20 @@ def run_read_query(
                 trace=traces,
             )
 
+    result_cols_lower = [c.lower() for c in columns]
+    missing_requested = [field for field in requested if field not in result_cols_lower]
+    if missing_requested:
+        return TaskResult(
+            intent=intent,
+            status=TaskStatus.UNSUPPORTED,
+            query_result=None,
+            error_message=f"Result missing requested fields: {', '.join(missing_requested)}",
+            error_code="FIELDS_MISSING",
+            hint="Try asking for those columns explicitly.",
+            raw_question=question,
+            trace=traces,
+        )
+
     row_count = len(all_rows)
     max_rows = ctx.config.max_rows or 20
     rows = all_rows[:max_rows]
@@ -757,12 +901,15 @@ def run_write_query(
     budget: TokenBudget | None = None,
     dry_run: bool | None = None,
     force: bool = False,
+    apply_changes: bool = False,
+    start_ts: float | None = None,
 ) -> TaskResult:
     traces = traces or []
     budget = budget or TokenBudget(
         max_step_tokens=ctx.config.max_prompt_tokens,
         max_total_tokens=ctx.config.max_total_tokens,
     )
+    start_ts = start_ts or time.perf_counter()
 
     if not ctx.config.allow_write:
         return TaskResult(
@@ -770,6 +917,8 @@ def run_write_query(
             status=TaskStatus.UNSUPPORTED,
             query_result=None,
             error_message="Write operations are disabled. Use --allow-write to enable.",
+            error_code="WRITE_DISABLED",
+            hint="Run with --allow-write or set SQL_AGENT_ALLOW_WRITE=1",
             raw_question=question,
             trace=traces,
         )
@@ -780,6 +929,8 @@ def run_write_query(
             status=TaskStatus.UNSUPPORTED,
             query_result=None,
             error_message="Force execution is not allowed.",
+            error_code="FORCE_DISABLED",
+            hint="Set SQL_AGENT_ALLOW_FORCE=1 to permit --force.",
             raw_question=question,
             trace=traces,
         )
@@ -795,6 +946,7 @@ def run_write_query(
             status=TaskStatus.UNSUPPORTED,
             query_result=None,
             error_message="Model refused to generate a write SQL statement.",
+            error_code="WRITE_REFUSED",
             raw_question=question,
             trace=traces,
         )
@@ -812,6 +964,17 @@ def run_write_query(
             notes=shape_note,
         )
     )
+    if ctx.config.max_wall_time_ms and (time.perf_counter() - start_ts) * 1000 > ctx.config.max_wall_time_ms:
+        return TaskResult(
+            intent=intent,
+            status=TaskStatus.ERROR,
+            query_result=None,
+            error_message="Time limit exceeded during planning.",
+            error_code="TIMEOUT",
+            hint="Try a simpler request or raise SQL_AGENT_MAX_WALL_MS.",
+            raw_question=question,
+            trace=traces,
+        )
     err = budget.record(gen_metrics, "generate_write_sql")
     if err:
         return TaskResult(
@@ -832,16 +995,19 @@ def run_write_query(
             status=TaskStatus.UNSUPPORTED,
             query_result=None,
             error_message=exc.reason,
+            error_code="WRITE_GUARD",
+            hint="Narrow WHERE or remove dangerous keywords.",
             raw_question=question,
             trace=traces,
         )
 
+    action, table, where_clause = _parse_write_shape(gen.sql)
     user_dry_run = ctx.config.dry_run_default if dry_run is None else dry_run
-    is_update_or_delete = gen.sql.strip().lower().startswith(("update", "delete"))
+    probe_affected: int | None = None
+    last_row_id: int | None = None
+    samples_before: list[str] = []
 
-    # Always probe updates/deletes to detect wide impact
-    probe_affected = None
-    if is_update_or_delete:
+    if action in ("update", "delete"):
         try:
             probe_affected, _ = ctx.db_handle.execute_write(gen.sql, dry_run=True, require_where=require_where)
             traces.append(
@@ -856,6 +1022,30 @@ def run_write_query(
                 status=TaskStatus.ERROR,
                 query_result=None,
                 error_message=exc.inner_message,
+                error_code="WRITE_EXEC_ERROR",
+                raw_question=question,
+                trace=traces,
+            )
+        if ctx.config.max_wall_time_ms and (time.perf_counter() - start_ts) * 1000 > ctx.config.max_wall_time_ms:
+            return TaskResult(
+                intent=intent,
+                status=TaskStatus.ERROR,
+                query_result=None,
+                error_message="Time limit exceeded during probe.",
+                error_code="TIMEOUT",
+                hint="Narrow the write or raise SQL_AGENT_MAX_WALL_MS.",
+                raw_question=question,
+                trace=traces,
+            )
+        samples_before = _collect_samples(ctx, table or "", where_clause) if table else []
+        if probe_affected is not None and probe_affected > ctx.config.max_write_rows:
+            return TaskResult(
+                intent=intent,
+                status=TaskStatus.UNSUPPORTED,
+                query_result=None,
+                error_message=f"Would affect {probe_affected} rows; limit is {ctx.config.max_write_rows}.",
+                error_code="WRITE_TOO_LARGE",
+                hint="Add stricter WHERE or LIMIT rows.",
                 raw_question=question,
                 trace=traces,
             )
@@ -865,11 +1055,61 @@ def run_write_query(
                 status=TaskStatus.UNSUPPORTED,
                 query_result=None,
                 error_message=f"Wide update/delete would affect {probe_affected} rows; use --force or narrow WHERE.",
+                error_code="WRITE_WIDE",
+                hint="Add stricter WHERE or use --force if intentional.",
+                raw_question=question,
+                trace=traces,
+            )
+    elif action == "insert":
+        try:
+            probe_affected, last_row_id = ctx.db_handle.execute_write(gen.sql, dry_run=True, require_where=require_where)
+            traces.append(
+                StepTrace(
+                    name="execute_write_probe",
+                    output_preview=f"affected_rows={probe_affected}, dry_run=True",
+                )
+            )
+        except DbExecutionError as exc:
+            return TaskResult(
+                intent=intent,
+                status=TaskStatus.ERROR,
+                query_result=None,
+                error_message=exc.inner_message,
+                error_code="WRITE_EXEC_ERROR",
                 raw_question=question,
                 trace=traces,
             )
 
+    # Require explicit confirmation to commit
+    if ctx.config.write_apply_required and not apply_changes:
+        summary_parts = [f"Planned {action or 'write'}"]
+        if probe_affected is not None:
+            summary_parts.append(f"rows={probe_affected}")
+        if where_clause:
+            summary_parts.append(f"where={where_clause}")
+        if samples_before:
+            summary_parts.append(f"sample_before={'; '.join(samples_before[:3])}")
+        summary = "; ".join(summary_parts)
+        return TaskResult(
+            intent=intent,
+            status=TaskStatus.UNSUPPORTED,
+            query_result=QueryResult(
+                sql=gen.sql,
+                columns=[],
+                rows=[],
+                summary=summary,
+                trace=traces if ctx.config.allow_trace else None,
+            ),
+            error_message="Write requires confirmation.",
+            error_code="WRITE_CONFIRM_REQUIRED",
+            hint="Re-run with --apply (and --allow-write) to commit.",
+            raw_question=question,
+            trace=traces,
+        )
+
     final_dry_run = user_dry_run
+    if apply_changes:
+        final_dry_run = False
 
     try:
         affected, last_row_id = ctx.db_handle.execute_write(
@@ -883,6 +1123,18 @@ def run_write_query(
             status=TaskStatus.ERROR,
             query_result=None,
             error_message=exc.inner_message,
+            error_code="WRITE_EXEC_ERROR",
+            raw_question=question,
+            trace=traces,
+        )
+    if ctx.config.max_wall_time_ms and (time.perf_counter() - start_ts) * 1000 > ctx.config.max_wall_time_ms:
+        return TaskResult(
+            intent=intent,
+            status=TaskStatus.ERROR,
+            query_result=None,
+            error_message="Time limit exceeded during execution.",
+            error_code="TIMEOUT",
+            hint="Reduce result size or raise SQL_AGENT_MAX_WALL_MS.",
             raw_question=question,
             trace=traces,
         )
@@ -892,30 +1144,79 @@ def run_write_query(
             name="execute_write",
             output_preview=f"affected_rows={affected}, dry_run={final_dry_run}",
             severity=SeverityLevel.WARNING
-            if (affected > 1 and not final_dry_run and is_update_or_delete)
+            if (affected > 1 and not final_dry_run and action in ("update", "delete"))
             else SeverityLevel.INFO,
             notes="multi-row commit with force" if (affected > 1 and not final_dry_run and force) else None,
         )
     )
 
-    action = _action_from_sql(gen.sql)
-    if action == "delete":
-        if final_dry_run:
-            summary = f"Dry-run: would delete {affected} row(s)"
-        else:
-            summary = f"Deleted {affected} row(s)"
-    elif action == "update":
-        if final_dry_run:
-            summary = f"Dry-run: would update {affected} row(s)"
-        else:
-            summary = f"Updated {affected} row(s)"
+    if (
+        not final_dry_run
+        and probe_affected is not None
+        and action in ("update", "delete")
+        and affected != probe_affected
+        and not force
+    ):
+        return TaskResult(
+            intent=intent,
+            status=TaskStatus.UNSUPPORTED,
+            query_result=None,
+            error_message=f"Plan/apply mismatch: estimated {probe_affected}, actual {affected}.",
+            error_code="WRITE_DIVERGED",
+            hint="Re-run after narrowing WHERE or use --force if intentional.",
+            raw_question=question,
+            trace=traces,
+        )
+
+    samples_after: list[str] = []
+    if not final_dry_run:
+        if action in ("update", "delete"):
+            samples_after = _collect_samples(ctx, table or "", where_clause) if table else []
+        elif action == "insert" and table:
+            if last_row_id:
+                samples_after = _collect_samples(ctx, table, f"rowid = {last_row_id}")
+            else:
+                samples_after = _collect_samples(ctx, table, "1=1")
+
+    def _evidence_part(label: str, samples: list[str]) -> str | None:
+        if not samples:
+            return None
+        shown = samples[:3]
+        more = f" (+{len(samples) - len(shown)} more)" if len(samples) > len(shown) else ""
+        return f"{label}: {'; '.join(shown)}{more}"
+
+    evidence_parts: list[str] = []
+    if where_clause:
+        evidence_parts.append(f"where={where_clause}")
+    if samples_before:
+        evidence = _evidence_part("before", samples_before)
+        if evidence:
+            evidence_parts.append(evidence)
+    if samples_after:
+        evidence = _evidence_part("after", samples_after)
+        if evidence:
+            evidence_parts.append(evidence)
+    if samples_before or samples_after:
+        traces.append(
+            StepTrace(
+                name="evidence",
+                output_preview="; ".join(evidence_parts) if evidence_parts else None,
+            )
+        )
+
+    action_label = action or _action_from_sql(gen.sql)
+    if action_label == "delete":
+        summary = f"{'Dry-run' if final_dry_run else 'Deleted'} {affected} row(s)"
+    elif action_label == "update":
+        summary = f"{'Dry-run' if final_dry_run else 'Updated'} {affected} row(s)"
     else:
         state = "Dry-run" if final_dry_run else "Committed"
         summary = f"{state}: {affected} row(s) affected"
-        if last_row_id and affected > 0:
+        if last_row_id and affected > 0 and not final_dry_run:
             summary = f"{summary}; last_row_id={last_row_id}"
-    if probe_affected is not None and final_dry_run and probe_affected != affected:
-        summary = f"{summary} (probe_rows={probe_affected})"
+
+    if evidence_parts:
+        summary = f"{summary} [{'; '.join(evidence_parts)}]"
 
     return TaskResult(
         intent=intent,
@@ -939,12 +1240,14 @@ def run_task(
     *,
     dry_run_override: bool | None = None,
     force: bool = False,
+    apply_changes: bool = False,
 ) -> TaskResult:
     traces: list[StepTrace] = []
     budget = TokenBudget(
         max_step_tokens=ctx.config.max_prompt_tokens,
         max_total_tokens=ctx.config.max_total_tokens,
     )
+    start_ts = time.perf_counter()
 
     intent = detect_intent(question, ctx.intent_model)
     intent_metrics = _last_metrics(ctx.intent_model)
@@ -968,7 +1271,7 @@ def run_task(
         )
 
     if intent in (IntentType.READ_SIMPLE, IntentType.READ_ANALYTIC):
-        return run_read_query(question, ctx, intent, traces, budget)
+        return run_read_query(question, ctx, intent, traces, budget, start_ts=start_ts)
 
     if intent == IntentType.WRITE:
         return run_write_query(
@@ -979,6 +1282,8 @@ def run_task(
             budget,
             dry_run=dry_run_override,
             force=force,
+            apply_changes=apply_changes,
+            start_ts=start_ts,
         )
 
     return TaskResult(

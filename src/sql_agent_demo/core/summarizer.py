@@ -128,6 +128,18 @@ def summarize(question: str, columns: list[str], rows: list[Sequence[object]]) -
     count_label = _label_for_count(label_source or "result", row_count)
     prefix = f"{row_count} {count_label}"
 
+    if display_idx is not None and len(columns) > 1:
+        # If multiple columns are requested, show compact row previews
+        preview_rows = []
+        for row in rows[:preview_limit]:
+            parts = [f"{col}: {_stringify(row[idx])}" for idx, col in enumerate(columns)]
+            preview_rows.append(" | ".join(parts))
+        preview = "; ".join(preview_rows)
+        extra = row_count - preview_limit
+        if extra > 0:
+            preview = f"{preview} (+{extra} more)"
+        return f"{prefix}: {preview}"
+
     if display_idx is not None:
         values = [_stringify(row[display_idx]) for row in rows[:preview_limit]]
         preview = ", ".join(values)

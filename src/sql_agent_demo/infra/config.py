@@ -53,6 +53,11 @@ def load_config(cli_overrides: Dict[str, Any] | None = None) -> AgentConfig:
         require_where=_parse_bool(env.get("SQL_AGENT_REQUIRE_WHERE"), defaults.require_where),
         dry_run_default=_parse_bool(env.get("SQL_AGENT_DRY_RUN_DEFAULT"), defaults.dry_run_default),
         allow_force=_parse_bool(env.get("SQL_AGENT_ALLOW_FORCE"), defaults.allow_force),
+        write_apply_required=_parse_bool(env.get("SQL_AGENT_WRITE_APPLY_REQUIRED"), True),
+        max_write_rows=_parse_int(env.get("SQL_AGENT_MAX_WRITE_ROWS"), 1000),
+        max_wall_time_ms=_parse_int(env.get("SQL_AGENT_MAX_WALL_MS"), defaults.max_wall_time_ms or 0) or None,
+        max_trace_chars=_parse_int(env.get("SQL_AGENT_MAX_TRACE_CHARS"), defaults.max_trace_chars),
+        max_trace_steps=_parse_int(env.get("SQL_AGENT_MAX_TRACE_STEPS"), defaults.max_trace_steps),
     )
 
     for key, value in cli_overrides.items():
