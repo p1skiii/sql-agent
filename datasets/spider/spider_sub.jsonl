@@ -1,0 +1,30 @@
+{"id": "spider_local_0", "db_id": "sandbox", "question": "List all student names.", "gold_sql": null, "task_type": "qa", "expected_mode": "read"}
+{"id": "spider_local_1", "db_id": "sandbox", "question": "Which students are from Seattle?", "gold_sql": null, "task_type": "qa", "expected_mode": "read"}
+{"id": "spider_local_2", "db_id": "sandbox", "question": "Show students majoring in Computer Science.", "gold_sql": null, "task_type": "qa", "expected_mode": "read"}
+{"id": "spider_local_3", "db_id": "sandbox", "question": "Give names and GPA of students with GPA above 3.5.", "gold_sql": null, "task_type": "qa", "expected_mode": "read"}
+{"id": "spider_local_4", "db_id": "sandbox", "question": "Count students in each major.", "gold_sql": null, "task_type": "qa", "expected_mode": "read"}
+{"id": "spider_local_5", "db_id": "sandbox", "question": "List courses and their instructors.", "gold_sql": null, "task_type": "qa", "expected_mode": "read"}
+{"id": "spider_local_6", "db_id": "sandbox", "question": "Which courses have 4 credits?", "gold_sql": null, "task_type": "qa", "expected_mode": "read"}
+{"id": "spider_local_7", "db_id": "sandbox", "question": "Show enrollments with grade A.", "gold_sql": null, "task_type": "qa", "expected_mode": "read"}
+{"id": "spider_local_8", "db_id": "sandbox", "question": "List students and their majors sorted by GPA desc.", "gold_sql": null, "task_type": "qa", "expected_mode": "read"}
+{"id": "spider_local_9", "db_id": "sandbox", "question": "Find students from Chicago or Denver.", "gold_sql": null, "task_type": "qa", "expected_mode": "read"}
+{"id": "spider_local_10", "db_id": "sandbox", "question": "Average GPA by city.", "gold_sql": null, "task_type": "qa", "expected_mode": "read"}
+{"id": "spider_local_11", "db_id": "sandbox", "question": "Top 3 students by GPA.", "gold_sql": null, "task_type": "qa", "expected_mode": "read"}
+{"id": "spider_local_12", "db_id": "sandbox", "question": "How many courses does each student take?", "gold_sql": null, "task_type": "qa", "expected_mode": "read"}
+{"id": "spider_local_13", "db_id": "sandbox", "question": "List students not in Denver.", "gold_sql": null, "task_type": "qa", "expected_mode": "read"}
+{"id": "spider_local_14", "db_id": "sandbox", "question": "List distinct cities of students.", "gold_sql": null, "task_type": "qa", "expected_mode": "read"}
+{"id": "spider_local_15", "db_id": "sandbox", "question": "Find students with GPA between 3.4 and 3.8.", "gold_sql": null, "task_type": "qa", "expected_mode": "read"}
+{"id": "spider_local_16", "db_id": "sandbox", "question": "Show students and courses they enrolled (join).", "gold_sql": null, "task_type": "qa", "expected_mode": "read"}
+{"id": "spider_local_17", "db_id": "sandbox", "question": "List students with grade B or higher in any course.", "gold_sql": null, "task_type": "qa", "expected_mode": "read"}
+{"id": "spider_local_18", "db_id": "sandbox", "question": "Find courses taken by Alice Johnson.", "gold_sql": null, "task_type": "qa", "expected_mode": "read"}
+{"id": "spider_local_19", "db_id": "sandbox", "question": "Which students take Database Systems?", "gold_sql": null, "task_type": "qa", "expected_mode": "read"}
+{"id": "spider_local_20", "db_id": "sandbox", "question": "Show student name, course title, grade for all enrollments.", "gold_sql": null, "task_type": "qa", "expected_mode": "read"}
+{"id": "spider_local_21", "db_id": "sandbox", "question": "Count enrollments per course.", "gold_sql": null, "task_type": "qa", "expected_mode": "read"}
+{"id": "spider_local_22", "db_id": "sandbox", "question": "List students with GPA below 3.5.", "gold_sql": null, "task_type": "qa", "expected_mode": "read"}
+{"id": "spider_local_23", "db_id": "sandbox", "question": "Find majors with more than 1 student.", "gold_sql": null, "task_type": "qa", "expected_mode": "read"}
+{"id": "spider_local_24", "db_id": "sandbox", "question": "Show max GPA per major.", "gold_sql": null, "task_type": "qa", "expected_mode": "read"}
+{"id": "spider_local_25", "db_id": "sandbox", "question": "List instructors teaching 3-credit courses.", "gold_sql": null, "task_type": "qa", "expected_mode": "read"}
+{"id": "spider_local_26", "db_id": "sandbox", "question": "Find students whose name contains 'a'.", "gold_sql": null, "task_type": "qa", "expected_mode": "read"}
+{"id": "spider_local_27", "db_id": "sandbox", "question": "Show students from New York.", "gold_sql": null, "task_type": "qa", "expected_mode": "read"}
+{"id": "spider_local_28", "db_id": "sandbox", "question": "List students and whether their GPA is above 3.6.", "gold_sql": null, "task_type": "qa", "expected_mode": "read"}
+{"id": "spider_local_29", "db_id": "sandbox", "question": "How many students are in the database?", "gold_sql": null, "task_type": "qa", "expected_mode": "read"}
