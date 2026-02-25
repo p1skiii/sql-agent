@@ -273,6 +273,22 @@ def _shape_sql(sql: str, question: str, default_limit: int) -> tuple[str, str | 
     return shaped, note
 
 
+def _quote_table_identifiers(sql: str) -> str:
+    """Quote table names that contain hyphens or start with digits to avoid SQLite syntax errors."""
+    def repl(match):
+        name = match.group(1)
+        stripped = name.strip()
+        if stripped.startswith(("\"", "`", "[")):
+            return match.group(0)  # already quoted
+        if any(ch in stripped for ch in "- ") or stripped[:1].isdigit():
+            return match.group(0).replace(name, f'"{stripped}"', 1)
+        return match.group(0)
+
+    sql = re.sub(r"(?i)from\\s+([\\w\\-\\.]+)", repl, sql)
+    sql = re.sub(r"(?i)join\\s+([\\w\\-\\.]+)", repl, sql)
+    return sql
+
+
 def _shape_student_insert(sql: str) -> tuple[str, str | None]:
     """Ensure INSERT into students includes required NOT NULL columns with defaults."""
     pattern = re.compile(
@@ -518,6 +534,7 @@ def run_read_query(
                 raw_question=question,
                 trace=traces,
             )
+        gen.sql = _quote_table_identifiers(gen.sql)
         shaped_sql, shape_note = _shape_sql(gen.sql, question, ctx.config.sql_default_limit)
         if shape_note:
             traces.append(StepTrace(name="shape_sql", output_preview=_preview(shaped_sql), notes=shape_note))

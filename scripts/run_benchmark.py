@@ -217,6 +217,43 @@ def main():
             last50.append(code or 500)
             fail_streak += 1
             print(f"[WARN] id={item.get('id')} failed: {exc}")
+            # persist the failure record to keep progress
+            obj = {
+                "id": item.get("id"),
+                "dataset": dataset_name,
+                "config_tag": args.tag,
+                "run_id": run_id,
+                "db_id": item.get("db_id"),
+                "question": item.get("question"),
+                "request_id": req_id,
+                "ok": False,
+                "status": "ERROR",
+                "error_code": "EXCEPTION",
+                "reason": msg,
+                "sql": None,
+                "summary": None,
+                "latency_ms": latency_ms,
+                "tokens": 0,
+                "stage_metrics": {},
+                "stage_latency_ms": {},
+                "stage_tokens": {},
+                "guard_hit": False,
+                "guard_rule": None,
+                "guard_reason": msg,
+                "probe_rows": None,
+                "affected_rows": None,
+                "dry_run": None,
+                "repair_attempted": None,
+                "repair_success": None,
+                "model": config.sql_model_name,
+                "base_url": os.environ.get("LLM_BASE_URL"),
+                "trace_version": trace_version,
+                "prompt_version": prompt_version,
+                "config_hash": config_hash,
+                "timestamp": time.time(),
+            }
+            save(obj)
+            done_ids.add(item.get("id"))
             if rate_limit_streak >= 3:
                 wait = 1800
                 print(f"[PAUSE] 429 x3, sleeping {wait}s")

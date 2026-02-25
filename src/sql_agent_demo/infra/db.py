@@ -24,7 +24,7 @@ class DatabaseHandle:
 
             parts: list[str] = []
             for table in tables:
-                col_cursor = conn.execute(f"PRAGMA table_info({table});")
+                col_cursor = conn.execute(f'PRAGMA table_info("{table}");')
                 columns = [str(row[1]) for row in col_cursor.fetchall()]
                 parts.append(f"{table}: {', '.join(columns)}")
 

@@ -10,3 +10,11 @@ frontend/node_modules
 frontend/.next
 artifacts/
 datasets/spider_raw/
+datasets/spider_full/
+datasets/spider_hf/
+datasets/bird_raw/
+datasets/llmsql_raw/
+datasets/bird/database/
+datasets/spider/spider_data/
+datasets/llmsql/sqlite_tables.db
+datasets/*.zip
