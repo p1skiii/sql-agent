@@ -1,4 +1,4 @@
-import argparse, json, uuid, time, hashlib, os
+import argparse, json, uuid, time, hashlib, os, re
 from pathlib import Path
 from collections import deque
 import yaml
@@ -52,6 +52,32 @@ def aggregate_trace(trace):
     return stages, total_tokens
 
 
+def extract_affected(trace_steps):
+    affected = None
+    probe = None
+    dry_run = None
+    guard_rule = None
+    guard_reason = None
+    for step in trace_steps or []:
+        name = getattr(step, "name", None) or step.get("name")
+        preview = getattr(step, "output_preview", None) if hasattr(step, "output_preview") else step.get("output_preview")
+        if name in ("execute_write", "execute_write_probe") and preview:
+            m = re.search(r"affected_rows=(\\d+)", preview)
+            if m:
+                val = int(m.group(1))
+                if name == "execute_write_probe":
+                    probe = val
+                else:
+                    affected = val
+            m2 = re.search(r"dry_run=(true|false)", preview or "", re.IGNORECASE)
+            if m2:
+                dry_run = m2.group(1).lower() == "true"
+        if name and "guard" in name.lower():
+            guard_rule = name
+            guard_reason = preview
+    return probe, affected, dry_run, guard_rule, guard_reason
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
@@ -67,7 +93,8 @@ def main():
     if args.limit:
         data = data[: args.limit]
 
-    out_path = Path(args.out) if args.out else Path(f"results/{Path(args.dataset).stem}__{args.tag}.jsonl")
+    dataset_name = Path(args.dataset).stem
+    out_path = Path(args.out) if args.out else Path(f"results/{dataset_name}__{args.tag}.jsonl")
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     done_ids = set()
@@ -85,6 +112,7 @@ def main():
     prompt_version = cfg_yaml.get("prompt_version", "v1")
     trace_version = cfg_yaml.get("trace_version", "v1")
 
+    run_id = str(uuid.uuid4())
     fail_streak = 0
     rate_limit_streak = 0
     last50 = deque(maxlen=50)
@@ -112,7 +140,7 @@ def main():
         with out_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(obj, ensure_ascii=False) + "\n")
 
-    # Build base models/config once (single DB assumed)
+    # Build base models/config once (single DB assumed, but db_path may be mutated per row)
     config = load_config(base_overrides)
     db_handle = init_sandbox_db(config)
     intent_model, sql_model = build_models(config)
@@ -123,15 +151,27 @@ def main():
         req_id = str(uuid.uuid4())
         t0 = time.perf_counter()
         try:
+            # if dataset provides db_id and a db_root in config, swap db_path
+            db_root = cfg_yaml.get("db_root")
+            if db_root and item.get("db_id"):
+                candidate = Path(db_root) / item["db_id"] / f"{item['db_id']}.sqlite"
+                if candidate.exists():
+                    config.db_path = str(candidate)
+                    db_handle = init_sandbox_db(config)
             ctx = AgentContext(config=config, db_handle=db_handle, intent_model=intent_model, sql_model=sql_model)
             result = run_task(question=item["question"], ctx=ctx)
             latency_ms = (time.perf_counter() - t0) * 1000
-            stages, total_tokens = aggregate_trace(result.trace or (result.query_result.trace if result.query_result else None))
+            trace_steps = result.trace or (result.query_result.trace if result.query_result else None) or []
+            stages, total_tokens = aggregate_trace(trace_steps)
+            probe_rows, affected_rows, dry_run, guard_rule, guard_reason = extract_affected(trace_steps)
             lat_hist.append(latency_ms)
             last50.append(200 if result.status.name == "SUCCESS" else 400)
             stop_for_rates()
             obj = {
                 "id": item.get("id"),
+                "dataset": dataset_name,
+                "config_tag": args.tag,
+                "run_id": run_id,
                 "db_id": item.get("db_id"),
                 "question": item.get("question"),
                 "request_id": req_id,
@@ -144,6 +184,16 @@ def main():
                 "latency_ms": latency_ms,
                 "tokens": total_tokens,
                 "stage_metrics": stages,
+                "stage_latency_ms": {k: v.get("latency_ms") for k, v in stages.items()},
+                "stage_tokens": {k: v.get("tokens") for k, v in stages.items()},
+                "guard_hit": "GUARD" in (getattr(result, "error_code", "") or ""),
+                "guard_rule": guard_rule,
+                "guard_reason": guard_reason or result.error_message,
+                "probe_rows": probe_rows,
+                "affected_rows": affected_rows,
+                "dry_run": dry_run,
+                "repair_attempted": None,
+                "repair_success": None,
                 "model": config.sql_model_name,
                 "base_url": os.environ.get("LLM_BASE_URL"),
                 "trace_version": trace_version,
