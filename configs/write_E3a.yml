@@ -1,11 +1,12 @@
 config:
-  db_path: ./datasets/spider/spider_data/database/department_management/department_management.sqlite
-  allow_write: false
+  db_path: ./sandbox/sandbox.db
+  allow_write: true
   require_where: true
   dry_run_default: true
   allow_trace: true
   intent_model_name: gpt-4o-mini
   sql_model_name: gpt-4o-mini
+  guard_level: strict
+  schema_mode: topk
 prompt_version: v1
 trace_version: v1
-db_root: ./datasets/spider/spider_data/database

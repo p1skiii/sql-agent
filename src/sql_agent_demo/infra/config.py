@@ -47,12 +47,16 @@ def load_config(cli_overrides: Dict[str, Any] | None = None) -> AgentConfig:
         intent_model_name=env.get("SQL_AGENT_INTENT_MODEL", defaults.intent_model_name),
         sql_model_name=env.get("SQL_AGENT_SQL_MODEL", defaults.sql_model_name),
         selfcheck_enabled=_parse_bool(env.get("SQL_AGENT_SELFCHECK"), defaults.selfcheck_enabled),
+        allow_repair=_parse_bool(env.get("SQL_AGENT_ALLOW_REPAIR"), defaults.allow_repair),
+        schema_truncate_chars=_parse_int(env.get("SQL_AGENT_SCHEMA_TRUNCATE_CHARS"), defaults.schema_truncate_chars),
         language=env.get("SQL_AGENT_LANGUAGE", defaults.language),
         allow_llm_summary=_parse_bool(env.get("SQL_AGENT_ALLOW_LLM_SUMMARY"), defaults.allow_llm_summary),
         allow_write=_parse_bool(env.get("SQL_AGENT_ALLOW_WRITE"), defaults.allow_write),
         require_where=_parse_bool(env.get("SQL_AGENT_REQUIRE_WHERE"), defaults.require_where),
         dry_run_default=_parse_bool(env.get("SQL_AGENT_DRY_RUN_DEFAULT"), defaults.dry_run_default),
         allow_force=_parse_bool(env.get("SQL_AGENT_ALLOW_FORCE"), defaults.allow_force),
+        guard_level=env.get("SQL_AGENT_GUARD_LEVEL", defaults.guard_level),
+        schema_mode=env.get("SQL_AGENT_SCHEMA_MODE", defaults.schema_mode),
     )
 
     for key, value in cli_overrides.items():
@@ -60,6 +64,15 @@ def load_config(cli_overrides: Dict[str, Any] | None = None) -> AgentConfig:
             continue
         if hasattr(config, key):
             setattr(config, key, value)
+
+    # normalize string enums
+    gl = str(config.guard_level).lower()
+    if gl in ("false", "0", "off"):
+        gl = "off"
+    elif gl in ("loose", "lenient"):
+        gl = "loose"
+    config.guard_level = gl
+    config.schema_mode = str(config.schema_mode).lower()
 
     return config
 

@@ -12,8 +12,9 @@ from sql_agent_demo.core.safety import validate_readonly_sql, validate_write_sql
 class DatabaseHandle:
     """Thin wrapper around SQLite for read + guarded write execution."""
 
-    def __init__(self, db_path: str) -> None:
+    def __init__(self, db_path: str, guard_level: str = "strict") -> None:
         self.db_path = db_path
+        self.guard_level = guard_level
 
     def get_table_info(self) -> str:
         with sqlite3.connect(self.db_path) as conn:
@@ -32,7 +33,7 @@ class DatabaseHandle:
 
     def execute_select(self, sql: str) -> Tuple[List[str], List[Sequence[object]]]:
         try:
-            validate_readonly_sql(sql)
+            validate_readonly_sql(sql, guard_level=self.guard_level)
         except SqlGuardViolation as exc:
             raise DbExecutionError(sql, exc.reason) from exc
 
@@ -51,7 +52,7 @@ class DatabaseHandle:
         Returns (affected_rows, last_row_id). If dry_run is True, the change is rolled back.
         """
         try:
-            validate_write_sql(sql, require_where=require_where)
+            validate_write_sql(sql, require_where=require_where, guard_level=self.guard_level)
         except SqlGuardViolation as exc:
             raise DbExecutionError(sql, exc.reason) from exc
 
@@ -97,7 +98,7 @@ def init_sandbox_db(config: AgentConfig) -> DatabaseHandle:
             _execute_sql_script(conn, schema_path)
             _execute_sql_script(conn, seed_path)
 
-    return DatabaseHandle(str(db_path))
+    return DatabaseHandle(str(db_path), guard_level=config.guard_level)
 
 
 __all__ = ["DatabaseHandle", "init_sandbox_db"]

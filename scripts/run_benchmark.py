@@ -78,6 +78,25 @@ def extract_affected(trace_steps):
     return probe, affected, dry_run, guard_rule, guard_reason
 
 
+def classify_guard(reason: str | None) -> tuple[str | None, str | None]:
+    if not reason:
+        return None, None
+    r = reason.lower()
+    if "multiple statements" in r:
+        return "guard_multi_stmt", "guard"
+    if "only select statements" in r:
+        return "guard_non_select", "guard"
+    if "forbidden keyword" in r:
+        return "guard_forbidden_kw", "guard"
+    if "where clause" in r or "too broad" in r:
+        return "guard_where_required", "guard"
+    if "wide update/delete" in r:
+        return "probe_wide_write", "probe"
+    if "empty sql" in r:
+        return "guard_empty", "guard"
+    return None, None
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
@@ -167,6 +186,8 @@ def main():
             lat_hist.append(latency_ms)
             last50.append(200 if result.status.name == "SUCCESS" else 400)
             stop_for_rates()
+            guard_rule_id, guard_kind = classify_guard(result.error_message)
+            guard_rule_id, guard_kind = classify_guard(msg)
             obj = {
                 "id": item.get("id"),
                 "dataset": dataset_name,
@@ -180,6 +201,8 @@ def main():
                 "error_code": getattr(result, "error_code", None) or (result.status.value if result.status.name != "SUCCESS" else None),
                 "reason": result.error_message,
                 "sql": result.query_result.sql if result.query_result else None,
+                "raw_sql": result.query_result.raw_sql if result.query_result else None,
+                "repaired_sql": result.query_result.repaired_sql if result.query_result else None,
                 "summary": result.query_result.summary if result.query_result else None,
                 "latency_ms": latency_ms,
                 "tokens": total_tokens,
@@ -187,7 +210,7 @@ def main():
                 "stage_latency_ms": {k: v.get("latency_ms") for k, v in stages.items()},
                 "stage_tokens": {k: v.get("tokens") for k, v in stages.items()},
                 "guard_hit": "GUARD" in (getattr(result, "error_code", "") or ""),
-                "guard_rule": guard_rule,
+                "guard_rule": guard_rule or guard_rule_id,
                 "guard_reason": guard_reason or result.error_message,
                 "probe_rows": probe_rows,
                 "affected_rows": affected_rows,
@@ -231,6 +254,8 @@ def main():
                 "error_code": "EXCEPTION",
                 "reason": msg,
                 "sql": None,
+                "raw_sql": None,
+                "repaired_sql": None,
                 "summary": None,
                 "latency_ms": latency_ms,
                 "tokens": 0,
@@ -238,7 +263,7 @@ def main():
                 "stage_latency_ms": {},
                 "stage_tokens": {},
                 "guard_hit": False,
-                "guard_rule": None,
+                "guard_rule": guard_rule_id,
                 "guard_reason": msg,
                 "probe_rows": None,
                 "affected_rows": None,

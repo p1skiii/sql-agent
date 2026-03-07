@@ -18,8 +18,17 @@ def _has_forbidden_keyword(sql: str) -> str | None:
     return None
 
 
-def validate_readonly_sql(sql: str) -> None:
-    """Validate SQL is SELECT-only and free of obvious dangerous patterns."""
+def validate_readonly_sql(sql: str, guard_level: str = "strict") -> None:
+    """Validate SQL is SELECT-only and free of obvious dangerous patterns.
+
+    guard_level:
+        - "strict": full checks (default)
+        - "loose": allow multi-statement and skip forbidden keyword scan, but still require SELECT
+        - "off": skip all checks
+    """
+    if guard_level == "off":
+        return
+
     normalized = sql.strip()
     lowered = normalized.lower()
 
@@ -29,14 +38,15 @@ def validate_readonly_sql(sql: str) -> None:
     if not lowered.startswith("select"):
         raise SqlGuardViolation(sql, "Only SELECT statements are allowed.")
 
-    if ";" in lowered:
+    if guard_level == "strict" and ";" in lowered:
         statements = [part.strip() for part in lowered.split(";") if part.strip()]
         if len(statements) > 1:
             raise SqlGuardViolation(sql, "Multiple statements detected; only a single SELECT is allowed.")
 
-    forbidden = _has_forbidden_keyword(lowered)
-    if forbidden:
-        raise SqlGuardViolation(sql, f"Forbidden keyword detected: {forbidden}")
+    if guard_level == "strict":
+        forbidden = _has_forbidden_keyword(lowered)
+        if forbidden:
+            raise SqlGuardViolation(sql, f"Forbidden keyword detected: {forbidden}")
 
 
 def _has_middle_semicolon(text: str) -> bool:
@@ -49,15 +59,18 @@ def _has_middle_semicolon(text: str) -> bool:
     return ";" in core
 
 
-def validate_write_sql(sql: str, require_where: bool = True) -> None:
+def validate_write_sql(sql: str, require_where: bool = True, guard_level: str = "strict") -> None:
     """Validate SQL is a single-statement INSERT/UPDATE/DELETE with safe shape."""
+    if guard_level == "off":
+        return
+
     normalized = sql.strip()
     lowered = normalized.lower()
 
     if not lowered:
         raise SqlGuardViolation(sql, "Empty SQL is not allowed.")
 
-    if _has_middle_semicolon(lowered):
+    if guard_level == "strict" and _has_middle_semicolon(lowered):
         raise SqlGuardViolation(sql, "Multiple statements detected; only one write statement is allowed.")
 
     if not lowered.startswith(_WRITE_ALLOWED_PREFIXES):

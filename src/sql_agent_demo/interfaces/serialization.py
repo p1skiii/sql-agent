@@ -49,6 +49,8 @@ def result_to_json(result, show_sql: bool) -> dict:
         "question": result.raw_question,
         "status": result.status.value,
         "sql": (result.query_result.sql if result.query_result and show_sql else None),
+        "raw_sql": result.query_result.raw_sql if result.query_result else None,
+        "repaired_sql": result.query_result.repaired_sql if result.query_result else None,
         "summary": result.query_result.summary if result.query_result else None,
         "error_code": result.status.value if result.status != TaskStatus.SUCCESS else None,
         "reason": result.error_message,

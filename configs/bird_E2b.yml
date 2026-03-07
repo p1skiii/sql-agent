@@ -1,11 +1,13 @@
 config:
-  db_path: ./datasets/spider/spider_data/database/department_management/department_management.sqlite
+  db_path: ./datasets/bird/database/restaurant/restaurant.sqlite
   allow_write: false
   require_where: true
   dry_run_default: true
   allow_trace: true
   intent_model_name: gpt-4o-mini
   sql_model_name: gpt-4o-mini
+  guard_level: off
+  schema_mode: topk
 prompt_version: v1
 trace_version: v1
-db_root: ./datasets/spider/spider_data/database
+db_root: ./datasets/bird/database
