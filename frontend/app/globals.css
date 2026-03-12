@@ -14,7 +14,7 @@ body {
   min-height: 100vh;
 }
 
-input, button {
+input, textarea, button {
   font: inherit;
 }
 
