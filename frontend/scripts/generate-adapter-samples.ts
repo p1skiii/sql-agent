@@ -76,14 +76,13 @@ async function startBackend(): Promise<void> {
 
   backendProc = spawn(
     "uv",
-    ["run", "--extra", "openai", "python", "-m", "sql_agent_demo.interfaces.api", "--host", "127.0.0.1", "--port", String(backendPort)],
+    ["run", "python", "-m", "sql_agent_demo.interfaces.api", "--host", "127.0.0.1", "--port", String(backendPort)],
     {
       cwd: REPO_ROOT,
       env: {
         ...process.env,
         LLM_BASE_URL: process.env.LLM_BASE_URL ?? "http://localhost:4141/v1",
         LLM_API_KEY: process.env.LLM_API_KEY ?? "dummy",
-        LLM_USE_SLIM: process.env.LLM_USE_SLIM ?? "1",
         SQL_AGENT_DB_PATH: dbPath,
         SQL_AGENT_SCHEMA_PATH: path.join(REPO_ROOT, "tests", "data", "schema.sql"),
         SQL_AGENT_SEED_PATH: path.join(REPO_ROOT, "tests", "data", "seed.sql"),

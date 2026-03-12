@@ -4,6 +4,7 @@ Each run emits one JSON line with the following fields (nulls allowed):
 
 - id, dataset, db_id, config_tag, run_id, request_id
 - question, sql, summary
+- result {columns, rows, row_count}
 - ok (bool), status, error_code, reason
 - model, base_url, prompt_version, trace_version, config_hash, timestamp
 - tokens (total), latency_ms

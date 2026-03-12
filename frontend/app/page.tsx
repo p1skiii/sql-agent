@@ -207,10 +207,10 @@ export default function Page() {
           </div>
 
           <div className="mt-6 rounded-3xl border border-white/10 bg-white/[0.03] p-5">
-            <p className="text-xs uppercase tracking-[0.24em] text-muted">Known limitation</p>
+            <p className="text-xs uppercase tracking-[0.24em] text-muted">Result source</p>
             <p className="mt-3 text-sm leading-6 text-foreground/90">
-              READ result preview is currently adapter-enriched through the SQLite helper. It is the stable frontend
-              evidence source for this phase, not a final database-layer design decision.
+              READ result preview comes directly from the backend `/run` payload. The adapter normalizes it without
+              doing a second database read, so the frontend contract stays stable across backend migrations.
             </p>
           </div>
 

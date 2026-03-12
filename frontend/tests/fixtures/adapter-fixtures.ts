@@ -17,6 +17,18 @@ export const readSuccessPayload = {
     { name: "intent_detection", preview: "READ_SIMPLE" },
     { name: "execute_sql", preview: "row_count=6" },
   ],
+  result: {
+    columns: ["id", "name"],
+    rows: [
+      { id: 1, name: "Alice Johnson" },
+      { id: 2, name: "Brian Smith" },
+      { id: 3, name: "Clara Lee" },
+      { id: 4, name: "Daniel Green" },
+      { id: 5, name: "Emily Davis" },
+      { id: 6, name: "Frank Moore" },
+    ],
+    row_count: 6,
+  },
 };
 
 export const readSuccessResult: ResultPreview = {
@@ -49,6 +61,7 @@ export const writeDryRunPayload = {
     { name: "generate_write_sql", preview: "UPDATE students SET gpa = 3.9 WHERE name = 'Alice Johnson'" },
     { name: "execute_write", preview: "affected_rows=1, dry_run=True" },
   ],
+  result: { columns: [], rows: [], row_count: 0 },
 };
 
 export const writeCommitPayload = {
@@ -68,6 +81,7 @@ export const writeCommitPayload = {
     { name: "generate_write_sql", preview: "UPDATE students SET gpa = 3.9 WHERE name = 'Alice Johnson'" },
     { name: "execute_write", preview: "affected_rows=1, dry_run=False" },
   ],
+  result: { columns: [], rows: [], row_count: 0 },
 };
 
 export const unsupportedPayload = {

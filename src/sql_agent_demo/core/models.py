@@ -66,6 +66,8 @@ class AgentConfig:
     max_summary_tokens: int | None = None
     sql_default_limit: int = 50
     allow_trace: bool = False
+    db_backend: str = "sqlite"
+    db_url: str | None = None
     db_path: str = "./sandbox/sandbox.db"
     schema_path: str = "./schema.sql"
     seed_path: str = "./seed.sql"
@@ -111,6 +113,7 @@ class QueryResult:
     sql: str
     raw_sql: str | None = None
     repaired_sql: str | None = None
+    row_count: int = 0
     columns: List[str] = None  # type: ignore
     rows: List[Sequence[Any]] = None  # type: ignore
     summary: str = ""

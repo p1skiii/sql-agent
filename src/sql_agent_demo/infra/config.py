@@ -40,6 +40,8 @@ def load_config(cli_overrides: Dict[str, Any] | None = None) -> AgentConfig:
         max_summary_tokens=_parse_int(env.get("SQL_AGENT_MAX_SUMMARY_TOKENS"), defaults.max_summary_tokens or 0) or None,
         sql_default_limit=_parse_int(env.get("SQL_AGENT_SQL_DEFAULT_LIMIT"), defaults.sql_default_limit),
         allow_trace=_parse_bool(env.get("SQL_AGENT_ALLOW_TRACE"), defaults.allow_trace),
+        db_backend=env.get("SQL_AGENT_DB_BACKEND", defaults.db_backend),
+        db_url=env.get("SQL_AGENT_DB_URL", defaults.db_url),
         db_path=env.get("SQL_AGENT_DB_PATH", defaults.db_path),
         schema_path=env.get("SQL_AGENT_SCHEMA_PATH", defaults.schema_path),
         seed_path=env.get("SQL_AGENT_SEED_PATH", defaults.seed_path),
@@ -72,6 +74,7 @@ def load_config(cli_overrides: Dict[str, Any] | None = None) -> AgentConfig:
     elif gl in ("loose", "lenient"):
         gl = "loose"
     config.guard_level = gl
+    config.db_backend = str(config.db_backend).lower()
     config.schema_mode = str(config.schema_mode).lower()
 
     return config

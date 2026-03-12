@@ -41,6 +41,10 @@ Success-only safe fields:
 - `raw.summary: string`
 - `raw.trace: array`
 - `raw.dry_run: boolean | null`
+- `raw.result: object`
+- `raw.result.columns: array`
+- `raw.result.rows: array`
+- `raw.result.row_count: number`
 
 Failure-only safe fields:
 - `error: string`
@@ -60,6 +64,7 @@ Read-success-only safe fields:
 - `raw.summary`
 - `raw.sql`
 - `raw.trace`
+- `raw.result`
 
 ## Unsafe / Do Not Depend On Yet
 
@@ -86,6 +91,7 @@ Safe now:
 - result message: `summary` on success, `error` on failure
 - SQL panel: `raw.sql`, `raw.raw_sql`, `raw.repaired_sql` when `raw` exists
 - trace panel: `raw.trace` when `raw` exists
+- result preview: `raw.result` normalized into `data.result`
 - write badge: `raw.mode` plus `raw.dry_run` when `raw` exists
 
 Not safe now:

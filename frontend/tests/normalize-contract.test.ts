@@ -11,15 +11,32 @@ import {
   writeDryRunPayload,
 } from "./fixtures/adapter-fixtures";
 
+const EXPECTED_TOP_LEVEL_KEYS = ["ok", "http_status", "status", "message", "data", "error", "raw"].sort();
+const EXPECTED_SUCCESS_DATA_KEYS = [
+  "question",
+  "mode",
+  "summary",
+  "sql",
+  "raw_sql",
+  "repaired_sql",
+  "dry_run",
+  "db_executed",
+  "committed",
+  "result",
+  "trace",
+].sort();
+
 test("normalize read success into stable contract", () => {
   const response = normalizeBackendSuccess(200, readSuccessPayload, readSuccessResult);
 
+  assert.deepEqual(Object.keys(response).sort(), EXPECTED_TOP_LEVEL_KEYS);
   assert.equal(response.http_status, 200);
   assert.equal(response.ok, true);
   assert.equal(response.status, "SUCCESS");
   assert.equal(response.message, readSuccessPayload.summary);
   assert.equal(response.error, null);
   assert.ok(response.data);
+  assert.deepEqual(Object.keys(response.data).sort(), EXPECTED_SUCCESS_DATA_KEYS);
   assert.equal(response.data.mode, "READ");
   assert.equal(response.data.db_executed, true);
   assert.equal(response.data.committed, null);
@@ -30,10 +47,12 @@ test("normalize read success into stable contract", () => {
 test("normalize write dry-run success into stable contract", () => {
   const response = normalizeBackendSuccess(200, writeDryRunPayload, emptyResultPreview());
 
+  assert.deepEqual(Object.keys(response).sort(), EXPECTED_TOP_LEVEL_KEYS);
   assert.equal(response.http_status, 200);
   assert.equal(response.ok, true);
   assert.equal(response.status, "SUCCESS");
   assert.ok(response.data);
+  assert.deepEqual(Object.keys(response.data).sort(), EXPECTED_SUCCESS_DATA_KEYS);
   assert.equal(response.data.mode, "WRITE");
   assert.equal(response.data.dry_run, true);
   assert.equal(response.data.db_executed, false);
@@ -44,9 +63,11 @@ test("normalize write dry-run success into stable contract", () => {
 test("normalize write commit success into stable contract", () => {
   const response = normalizeBackendSuccess(200, writeCommitPayload, emptyResultPreview());
 
+  assert.deepEqual(Object.keys(response).sort(), EXPECTED_TOP_LEVEL_KEYS);
   assert.equal(response.http_status, 200);
   assert.equal(response.ok, true);
   assert.ok(response.data);
+  assert.deepEqual(Object.keys(response.data).sort(), EXPECTED_SUCCESS_DATA_KEYS);
   assert.equal(response.data.mode, "WRITE");
   assert.equal(response.data.dry_run, false);
   assert.equal(response.data.db_executed, true);
@@ -57,6 +78,7 @@ test("normalize write commit success into stable contract", () => {
 test("normalize unsupported failure into stable contract", () => {
   const response = normalizeBackendFailure(400, unsupportedPayload, unsupportedPayload.reason ?? "Unsupported");
 
+  assert.deepEqual(Object.keys(response).sort(), EXPECTED_TOP_LEVEL_KEYS);
   assert.equal(response.http_status, 400);
   assert.equal(response.ok, false);
   assert.equal(response.status, "UNSUPPORTED");
@@ -70,6 +92,7 @@ test("normalize unsupported failure into stable contract", () => {
 test("normalize execution error into stable contract", () => {
   const response = normalizeBackendFailure(500, errorPayload, errorPayload.reason ?? "Error");
 
+  assert.deepEqual(Object.keys(response).sort(), EXPECTED_TOP_LEVEL_KEYS);
   assert.equal(response.http_status, 500);
   assert.equal(response.ok, false);
   assert.equal(response.status, "ERROR");
@@ -83,6 +106,7 @@ test("normalize execution error into stable contract", () => {
 test("normalize local validation failure into stable contract", () => {
   const response = normalizeValidationFailure("question is required");
 
+  assert.deepEqual(Object.keys(response).sort(), EXPECTED_TOP_LEVEL_KEYS);
   assert.equal(response.http_status, 400);
   assert.equal(response.ok, false);
   assert.equal(response.status, "BAD_REQUEST");

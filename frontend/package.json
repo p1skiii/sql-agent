@@ -7,8 +7,11 @@
     "build": "next build",
     "start": "next start",
     "test": "playwright test",
+    "test:frontend": "playwright test",
     "test:smoke": "playwright test -c playwright.smoke.config.ts",
-    "test:adapter": "node --experimental-strip-types --loader ./tests/next-server-loader.mjs --test ./tests/normalize-contract.test.ts ./tests/route-contract.test.ts",
+    "test:smoke:postgres": "SMOKE_DB_BACKEND=postgres playwright test -c playwright.smoke.config.ts",
+    "test:adapter": "node --experimental-strip-types --loader ./tests/next-server-loader.mjs --test ./tests/normalize-contract.test.ts ./tests/query-result.test.ts ./tests/route-contract.test.ts",
+    "test:adapter:real": "node --experimental-strip-types --loader ./tests/next-server-loader.mjs --test ./tests/route-contract.real.test.ts",
     "samples:adapter": "node --experimental-strip-types --loader ./tests/next-server-loader.mjs ./scripts/generate-adapter-samples.ts"
   },
   "dependencies": {

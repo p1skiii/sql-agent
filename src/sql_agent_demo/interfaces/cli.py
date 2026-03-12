@@ -29,6 +29,8 @@ from sql_agent_demo.interfaces.serialization import result_to_json
 
 
 def _add_shared_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--db-backend", dest="db_backend", type=str, help="Database backend: sqlite or postgres.")
+    parser.add_argument("--db-url", dest="db_url", type=str, help="Database URL for PostgreSQL.")
     parser.add_argument("--db-path", dest="db_path", type=str, help="Path to SQLite DB file.")
     parser.add_argument("--overwrite-db", dest="overwrite_db", action="store_true", help="Rebuild sandbox DB.")
     parser.add_argument("--max-rows", dest="max_rows", type=int, help="Max rows to return.")
@@ -68,21 +70,24 @@ def _bool_arg(val: str) -> bool:
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="SQL agent demo (read + guarded write).")
+    parser = argparse.ArgumentParser(
+        description="SQL agent CLI. Recommended: `sql-agent \"List the ids and names of all students.\" --show-sql`.",
+        epilog="Advanced paths remain available through `write` and `run-file`, but the primary documented runtime uses single-question CLI plus `sql-agent-api` for the backend.",
+    )
     subparsers = parser.add_subparsers(dest="command")
     subparsers.required = False
     parser.set_defaults(command="ask")
 
-    ask_parser = subparsers.add_parser("ask", help="Run a single question (default).")
+    ask_parser = subparsers.add_parser("ask", help="Recommended single-question entrypoint (default).")
     ask_parser.add_argument("question", type=str, help="User question in English.")
     _add_shared_arguments(ask_parser)
 
-    file_parser = subparsers.add_parser("run-file", help="Run queries from a YAML/JSON file.")
+    file_parser = subparsers.add_parser("run-file", help="Advanced batch runner for YAML/JSON query files.")
     file_parser.add_argument("file", type=str, help="Path to YAML/JSON dataset with queries.")
     file_parser.add_argument("--limit", type=int, default=1, help="Run at most this many queries from the file.")
     _add_shared_arguments(file_parser)
 
-    write_parser = subparsers.add_parser("write", help="Run a single write (INSERT/UPDATE/DELETE).")
+    write_parser = subparsers.add_parser("write", help="Guarded single-write entrypoint (dry-run by default).")
     write_parser.add_argument("question", type=str, help="Write request in English.")
     _add_shared_arguments(write_parser)
     write_parser.set_defaults()
@@ -234,6 +239,8 @@ def main() -> None:
     setup_logging()
 
     overrides = {
+        "db_backend": args.db_backend,
+        "db_url": args.db_url,
         "db_path": args.db_path,
         "overwrite_db": args.overwrite_db,
         "max_rows": args.max_rows,

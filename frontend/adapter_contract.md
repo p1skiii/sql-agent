@@ -96,4 +96,4 @@ Meaning:
 - `message` is the default frontend display field across success and failure.
 - `data.summary` is secondary success detail.
 - `data.result` is the stable source for result preview; frontend should not read tabular data from `raw`.
-- Real-model route checks and sample generation use the repo's configured model names together with `LLM_USE_SLIM=1` for compatibility with the local OpenAI-compatible proxy at `http://localhost:4141/v1`.
+- Real-model route checks and sample generation use the repo's configured model names through the same OpenAI-compatible proxy path at `http://localhost:4141/v1`.

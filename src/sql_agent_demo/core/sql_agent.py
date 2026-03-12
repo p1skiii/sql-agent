@@ -108,10 +108,10 @@ def select_schema_subset(question: str, full_schema: str, top_k: int = 3, max_co
 
 
 def _generate_sql_with_llm(
-    question: str, schema_snippet: str, model: Any, top_k: int, strict: bool = False
+    question: str, schema_snippet: str, model: Any, top_k: int, dialect: str, strict: bool = False
 ) -> SqlGenerationResult | None:
     system_prompt = (
-        "You are an expert SQL assistant. Generate a single SQL query that answers the user's question. "
+        f"You are an expert SQL assistant. Generate a single {dialect}-compatible SQL query that answers the user's question. "
         "Rules: only output one SELECT statement; do not include any write operations (INSERT, UPDATE, DELETE, DROP, "
         "ALTER, TRUNCATE, CREATE). If the request is not read-only, respond with ONLY_READ_ONLY_SUPPORTED. "
         "Do not fabricate columns or return hard-coded placeholder values; always select real columns such as instructor when asked. "
@@ -156,10 +156,10 @@ def _generate_sql_with_llm(
 
 
 def _generate_write_sql(
-    question: str, schema_snippet: str, model: Any, top_k: int
+    question: str, schema_snippet: str, model: Any, top_k: int, dialect: str
 ) -> SqlGenerationResult | None:
     system_prompt = (
-        "You are an expert SQL assistant. Generate ONE safe data-modifying statement (INSERT, UPDATE, or DELETE). "
+        f"You are an expert SQL assistant. Generate ONE safe {dialect}-compatible data-modifying statement (INSERT, UPDATE, or DELETE). "
         "Rules: only one statement; UPDATE/DELETE must include a WHERE clause; never use DROP/ALTER/TRUNCATE/DDL; "
         "do not fabricate columns; respond ONLY with JSON: {\"sql\": \"...\", \"tables\": [\"...\"], \"assumptions\": \"...\"}."
     )
@@ -341,10 +341,23 @@ def _quote_column_identifiers(sql: str) -> str:
     sql = re.sub(r"(?i)(group by|order by|having)\s+([\w.\-/, ]+)",
                  lambda m: m.group(1) + " " + ", ".join(quote_ident(p) for p in m.group(2).split(",")), sql)
 
-    # Replace common date functions to SQLite equivalents
+    return sql
+
+
+def _apply_sqlite_compat_rewrite(sql: str) -> str:
     sql = re.sub(r"(?i)year\(([^)]+)\)", r"strftime('%Y', \1)", sql)
     sql = re.sub(r"(?i)month\(([^)]+)\)", r"strftime('%m', \1)", sql)
     sql = re.sub(r"(?i)date_format\(([^,]+),\s*'%%Y-%%m-%%d'\)", r"date(\1)", sql)
+    return sql
+
+
+def _backend_sql_dialect(db_backend: str) -> str:
+    return "PostgreSQL" if str(db_backend).lower() == "postgres" else "SQLite"
+
+
+def _rewrite_sql_for_backend(sql: str, db_backend: str) -> str:
+    if str(db_backend).lower() == "sqlite":
+        return _apply_sqlite_compat_rewrite(sql)
     return sql
 
 
@@ -515,7 +528,14 @@ def _selfcheck_sql(question: str, sql: str, model: Any | None) -> SelfCheckResul
     )
 
 
-def repair_sql(question: str, sql: str, error_message: str, schema_snippet: str, model: Any) -> str | None:
+def repair_sql(
+    question: str,
+    sql: str,
+    error_message: str,
+    schema_snippet: str,
+    model: Any,
+    dialect: str,
+) -> str | None:
     """Attempt a single-shot SQL repair via LLM JSON output."""
     payload = model.generate_json(
         [
@@ -523,7 +543,8 @@ def repair_sql(question: str, sql: str, error_message: str, schema_snippet: str,
                 "role": "system",
                 "content": (
                     "You are fixing a SQL query that failed to execute. Return ONLY JSON: "
-                    '{"sql": "...", "reason": "..."} with a corrected SELECT-only statement.'
+                    '{"sql": "...", "reason": "..."} with a corrected '
+                    f"{dialect}-compatible SELECT-only statement."
                 ),
             },
             {
@@ -590,6 +611,7 @@ def run_read_query(
             schema_snippet,
             ctx.sql_model,
             ctx.config.top_k,
+            _backend_sql_dialect(ctx.config.db_backend),
             strict=attempted_strict,
         )
         if not gen:
@@ -604,6 +626,7 @@ def run_read_query(
         raw_sql = gen.sql
         gen.sql = _quote_table_identifiers(gen.sql)
         gen.sql = _quote_column_identifiers(gen.sql)
+        gen.sql = _rewrite_sql_for_backend(gen.sql, ctx.config.db_backend)
         shaped_sql, shape_note = _shape_sql(gen.sql, question, ctx.config.sql_default_limit)
         if shape_note:
             traces.append(StepTrace(name="shape_sql", output_preview=_preview(shaped_sql), notes=shape_note))
@@ -625,7 +648,7 @@ def run_read_query(
                 error_message=err,
                 raw_question=question,
                 trace=traces,
-        )
+            )
 
         wants_instructor = any(word in question.lower() for word in ("instructor", "teacher", "professor"))
         schema_has_instructor = _schema_has_column(full_schema, "instructor")
@@ -710,7 +733,14 @@ def run_read_query(
                 raw_question=question,
                 trace=traces,
             )
-        repair_sql_text = repair_sql(question, gen.sql, exc.inner_message, schema_snippet, ctx.sql_model)
+        repair_sql_text = repair_sql(
+            question,
+            gen.sql,
+            exc.inner_message,
+            schema_snippet,
+            ctx.sql_model,
+            _backend_sql_dialect(ctx.config.db_backend),
+        )
         if not repair_sql_text:
             return TaskResult(
                 intent=intent,
@@ -722,7 +752,6 @@ def run_read_query(
             )
 
         validate_readonly_sql(repair_sql_text, guard_level=ctx.config.guard_level)
-        repaired_sql = repair_sql_text
         traces.append(
             StepTrace(
                 name="repair_sql",
@@ -784,6 +813,7 @@ def run_read_query(
                     sql=repair_sql_text,
                     raw_sql=raw_sql,
                     repaired_sql=repair_sql_text,
+                    row_count=0,
                     columns=[],
                     rows=[],
                     summary="",
@@ -844,6 +874,7 @@ def run_read_query(
             sql=gen.sql,
             raw_sql=raw_sql,
             repaired_sql=gen.sql if gen.sql != raw_sql else None,
+            row_count=row_count,
             columns=list(columns),
             rows=list(rows),
             summary=summary,
@@ -901,7 +932,13 @@ def run_write_query(
     traces.append(StepTrace(name="load_schema", output_preview=_preview(schema_snippet)))
     traces.append(StepTrace(name="guard_config", output_preview=f"guard_level={ctx.config.guard_level} require_where={ctx.config.require_where}")) 
 
-    gen = _generate_write_sql(question, schema_snippet, ctx.sql_model, ctx.config.top_k)
+    gen = _generate_write_sql(
+        question,
+        schema_snippet,
+        ctx.sql_model,
+        ctx.config.top_k,
+        _backend_sql_dialect(ctx.config.db_backend),
+    )
     if not gen:
         return TaskResult(
             intent=intent,
@@ -913,6 +950,9 @@ def run_write_query(
         )
 
     shape_note = None
+    gen.sql = _quote_table_identifiers(gen.sql)
+    gen.sql = _quote_column_identifiers(gen.sql)
+    gen.sql = _rewrite_sql_for_backend(gen.sql, ctx.config.db_backend)
     if "insert into students" in gen.sql.lower():
         gen.sql, shape_note = _shape_student_insert(gen.sql)
 
@@ -1035,6 +1075,7 @@ def run_write_query(
         status=TaskStatus.SUCCESS,
         query_result=QueryResult(
             sql=gen.sql,
+            row_count=0,
             columns=[],
             rows=[],
             summary=summary,
