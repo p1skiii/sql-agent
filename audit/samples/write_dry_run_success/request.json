@@ -1,0 +1,6 @@
+{
+  "question": "Audit sample: dry-run update Alice Johnson GPA to 3.9",
+  "allow_write": true,
+  "dry_run": true,
+  "force": false
+}
