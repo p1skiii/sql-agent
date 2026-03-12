@@ -1,0 +1,6 @@
+{
+  "question": "Audit sample: error write with an invalid column",
+  "allow_write": true,
+  "dry_run": true,
+  "force": false
+}

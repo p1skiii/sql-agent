@@ -1,0 +1,3 @@
+{
+  "error": "{\"affected_rows\":null,\"diagnosis\":{\"action\":\"review_policy\",\"category\":\"GUARD\",\"evidence\":\"Write operations are disabled. Use --allow-write to enable.\"},\"dry_run\":null,\"error_code\":\"UNSUPPORTED\",\"mode\":\"WRITE\",\"ok\":false,\"question\":\"Audit sample: unsupported write when writes are disabled\",\"raw_sql\":null,\"reason\":\"Write operations are disabled. Use --allow-write to enable.\",\"repaired_sql\":null,\"sql\":null,\"status\":\"UNSUPPORTED\",\"summary\":null,\"trace\":[{\"completion_tokens\":null,\"duration_ms\":null,\"name\":\"intent_detection\",\"notes\":null,\"preview\":\"WRITE\",\"prompt_tokens\":null,\"severity\":\"INFO\",\"total_tokens\":null}]}\n"
+}

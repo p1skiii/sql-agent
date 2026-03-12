@@ -1,0 +1,13 @@
+{
+  "sql": "SELECT name, gpa FROM students WHERE name = 'Alice Johnson'",
+  "columns": [
+    "name",
+    "gpa"
+  ],
+  "rows": [
+    {
+      "name": "Alice Johnson",
+      "gpa": 3.9
+    }
+  ]
+}

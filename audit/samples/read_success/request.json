@@ -1,0 +1,6 @@
+{
+  "question": "Audit sample: list student ids and names",
+  "allow_write": false,
+  "dry_run": true,
+  "force": false
+}

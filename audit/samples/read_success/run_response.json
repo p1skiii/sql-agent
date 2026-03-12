@@ -1,0 +1,86 @@
+{
+  "affected_rows": null,
+  "dry_run": null,
+  "error_code": null,
+  "mode": "READ",
+  "ok": true,
+  "question": "Audit sample: list student ids and names",
+  "raw_sql": "SELECT id, name FROM students",
+  "reason": null,
+  "repaired_sql": "SELECT id, name FROM students LIMIT 50",
+  "sql": "SELECT id, name FROM students LIMIT 50",
+  "status": "SUCCESS",
+  "summary": "6 student ids: Alice Johnson, Brian Smith, Clara Lee, Daniel Green, Emily Davis, Frank Moore",
+  "trace": [
+    {
+      "completion_tokens": null,
+      "duration_ms": null,
+      "name": "intent_detection",
+      "notes": null,
+      "preview": "READ_SIMPLE",
+      "prompt_tokens": null,
+      "severity": "INFO",
+      "total_tokens": null
+    },
+    {
+      "completion_tokens": null,
+      "duration_ms": null,
+      "name": "load_schema",
+      "notes": null,
+      "preview": "enrollments(id, student_id, course_id, grade)\nstudents(id, name, city, major, gpa)",
+      "prompt_tokens": null,
+      "severity": "INFO",
+      "total_tokens": null
+    },
+    {
+      "completion_tokens": null,
+      "duration_ms": null,
+      "name": "guard_config",
+      "notes": null,
+      "preview": "guard_level=strict",
+      "prompt_tokens": null,
+      "severity": "INFO",
+      "total_tokens": null
+    },
+    {
+      "completion_tokens": null,
+      "duration_ms": null,
+      "name": "shape_sql",
+      "notes": "limit 50",
+      "preview": "SELECT id, name FROM students LIMIT 50",
+      "prompt_tokens": null,
+      "severity": "INFO",
+      "total_tokens": null
+    },
+    {
+      "completion_tokens": null,
+      "duration_ms": null,
+      "name": "generate_sql",
+      "notes": null,
+      "preview": "SELECT id, name FROM students LIMIT 50",
+      "prompt_tokens": null,
+      "severity": "INFO",
+      "total_tokens": null
+    },
+    {
+      "completion_tokens": null,
+      "duration_ms": null,
+      "name": "execute_sql",
+      "notes": null,
+      "preview": "row_count=6",
+      "prompt_tokens": null,
+      "severity": "INFO",
+      "total_tokens": null
+    },
+    {
+      "completion_tokens": null,
+      "duration_ms": null,
+      "name": "summarize",
+      "notes": null,
+      "preview": "6 student ids: Alice Johnson, Brian Smith, Clara Lee, Daniel Green, Emily Davis, Frank Moore",
+      "prompt_tokens": null,
+      "severity": "INFO",
+      "total_tokens": null
+    }
+  ]
+}

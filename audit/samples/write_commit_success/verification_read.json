@@ -1,0 +1,99 @@
+{
+  "request": {
+    "question": "Audit sample: verify Alice Johnson GPA after commit",
+    "allow_write": false,
+    "dry_run": true,
+    "force": false
+  },
+  "run_http": {
+    "status_code": 200,
+    "content_type": "application/json",
+    "ok": true
+  },
+  "run_response": {
+    "affected_rows": null,
+    "dry_run": null,
+    "error_code": null,
+    "mode": "READ",
+    "ok": true,
+    "question": "Audit sample: verify Alice Johnson GPA after commit",
+    "raw_sql": "SELECT gpa FROM students WHERE name = 'Alice Johnson'",
+    "reason": null,
+    "repaired_sql": "SELECT gpa FROM students WHERE name = 'Alice Johnson' LIMIT 50",
+    "sql": "SELECT gpa FROM students WHERE name = 'Alice Johnson' LIMIT 50",
+    "status": "SUCCESS",
+    "summary": "1 gpa: 3.9",
+    "trace": [
+      {
+        "completion_tokens": null,
+        "duration_ms": null,
+        "name": "intent_detection",
+        "notes": null,
+        "preview": "READ_SIMPLE",
+        "prompt_tokens": null,
+        "severity": "INFO",
+        "total_tokens": null
+      },
+      {
+        "completion_tokens": null,
+        "duration_ms": null,
+        "name": "load_schema",
+        "notes": null,
+        "preview": "students(id, name, city, major, gpa)",
+        "prompt_tokens": null,
+        "severity": "INFO",
+        "total_tokens": null
+      },
+      {
+        "completion_tokens": null,
+        "duration_ms": null,
+        "name": "guard_config",
+        "notes": null,
+        "preview": "guard_level=strict",
+        "prompt_tokens": null,
+        "severity": "INFO",
+        "total_tokens": null
+      },
+      {
+        "completion_tokens": null,
+        "duration_ms": null,
+        "name": "shape_sql",
+        "notes": "limit 50",
+        "preview": "SELECT gpa FROM students WHERE name = 'Alice Johnson' LIMIT 50",
+        "prompt_tokens": null,
+        "severity": "INFO",
+        "total_tokens": null
+      },
+      {
+        "completion_tokens": null,
+        "duration_ms": null,
+        "name": "generate_sql",
+        "notes": null,
+        "preview": "SELECT gpa FROM students WHERE name = 'Alice Johnson' LIMIT 50",
+        "prompt_tokens": null,
+        "severity": "INFO",
+        "total_tokens": null
+      },
+      {
+        "completion_tokens": null,
+        "duration_ms": null,
+        "name": "execute_sql",
+        "notes": null,
+        "preview": "row_count=1",
+        "prompt_tokens": null,
+        "severity": "INFO",
+        "total_tokens": null
+      },
+      {
+        "completion_tokens": null,
+        "duration_ms": null,
+        "name": "summarize",
+        "notes": null,
+        "preview": "1 gpa: 3.9",
+        "prompt_tokens": null,
+        "severity": "INFO",
+        "total_tokens": null
+      }
+    ]
+  }
+}
