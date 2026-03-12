@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "test": "playwright test"
+    "test": "playwright test",
+    "test:adapter": "node --experimental-strip-types --loader ./tests/next-server-loader.mjs --test ./tests/normalize-contract.test.ts ./tests/route-contract.test.ts",
+    "samples:adapter": "node --experimental-strip-types --loader ./tests/next-server-loader.mjs ./scripts/generate-adapter-samples.ts"
   },
   "dependencies": {
     "next": "16.0.10",

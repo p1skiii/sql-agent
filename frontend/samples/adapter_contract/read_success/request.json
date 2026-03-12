@@ -1,0 +1,6 @@
+{
+  "question": "List the ids and names of all students.",
+  "allow_write": false,
+  "dry_run": true,
+  "force": false
+}

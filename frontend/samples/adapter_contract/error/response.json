@@ -1,0 +1,37 @@
+{
+  "ok": false,
+  "http_status": 500,
+  "status": "ERROR",
+  "message": "no such column: missing_col",
+  "data": null,
+  "error": {
+    "kind": "backend",
+    "message": "no such column: missing_col",
+    "code": "ERROR"
+  },
+  "raw": {
+    "affected_rows": null,
+    "diagnosis": {
+      "action": "check_stack",
+      "category": "EXECUTION_ERROR",
+      "evidence": "no such column: missing_col"
+    },
+    "dry_run": null,
+    "error_code": "ERROR",
+    "mode": "WRITE",
+    "ok": false,
+    "question": "Audit sample: error write with an invalid column",
+    "raw_sql": null,
+    "reason": "no such column: missing_col",
+    "repaired_sql": null,
+    "sql": null,
+    "status": "ERROR",
+    "summary": null,
+    "trace": [
+      {
+        "name": "intent_detection",
+        "preview": "WRITE"
+      }
+    ]
+  }
+}

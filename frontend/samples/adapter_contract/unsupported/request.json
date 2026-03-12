@@ -1,0 +1,6 @@
+{
+  "question": "Audit sample: unsupported write when writes are disabled",
+  "allow_write": false,
+  "dry_run": true,
+  "force": false
+}

@@ -1,0 +1,13 @@
+{
+  "ok": false,
+  "http_status": 400,
+  "status": "BAD_REQUEST",
+  "message": "question is required",
+  "data": null,
+  "error": {
+    "kind": "validation",
+    "message": "question is required",
+    "code": "BAD_REQUEST"
+  },
+  "raw": null
+}

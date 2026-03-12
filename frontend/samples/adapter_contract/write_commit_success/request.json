@@ -1,0 +1,6 @@
+{
+  "question": "Update the student named Alice Johnson to have GPA 3.9.",
+  "allow_write": true,
+  "dry_run": false,
+  "force": false
+}

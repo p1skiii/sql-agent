@@ -1,0 +1,37 @@
+{
+  "ok": false,
+  "http_status": 400,
+  "status": "UNSUPPORTED",
+  "message": "Write operations are disabled. Use --allow-write to enable.",
+  "data": null,
+  "error": {
+    "kind": "backend",
+    "message": "Write operations are disabled. Use --allow-write to enable.",
+    "code": "UNSUPPORTED"
+  },
+  "raw": {
+    "affected_rows": null,
+    "diagnosis": {
+      "action": "review_policy",
+      "category": "GUARD",
+      "evidence": "Write operations are disabled. Use --allow-write to enable."
+    },
+    "dry_run": null,
+    "error_code": "UNSUPPORTED",
+    "mode": "WRITE",
+    "ok": false,
+    "question": "Audit sample: unsupported write when writes are disabled",
+    "raw_sql": null,
+    "reason": "Write operations are disabled. Use --allow-write to enable.",
+    "repaired_sql": null,
+    "sql": null,
+    "status": "UNSUPPORTED",
+    "summary": null,
+    "trace": [
+      {
+        "name": "intent_detection",
+        "preview": "WRITE"
+      }
+    ]
+  }
+}

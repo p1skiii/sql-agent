@@ -1,23 +1,69 @@
 import { NextResponse } from "next/server";
 
+import {
+  normalizeAdapterFailure,
+  normalizeBackendFailure,
+  normalizeBackendSuccess,
+  normalizeValidationFailure,
+  parseUpstreamPayload,
+} from "./normalize";
+import { loadResultPreview } from "./query-result";
+
+function backendRunUrl(): string {
+  return process.env.SQL_AGENT_RUN_URL ?? "http://localhost:8000/run";
+}
+
+function booleanField(value: unknown, fallback: boolean): boolean {
+  return typeof value === "boolean" ? value : fallback;
+}
+
 export async function POST(request: Request) {
-  const body = await request.json();
-  const question = body?.question;
-  if (!question || typeof question !== "string") {
-    return NextResponse.json({ error: "question is required" }, { status: 400 });
+  let body: Record<string, unknown>;
+  try {
+    body = (await request.json()) as Record<string, unknown>;
+  } catch {
+    const normalized = normalizeValidationFailure("invalid JSON body");
+    return NextResponse.json(normalized, { status: normalized.http_status });
   }
 
-  const resp = await fetch("http://localhost:8000/run", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question, allow_write: body?.allow_write ?? false, dry_run: body?.dry_run ?? true, force: body?.force ?? false }),
-  });
+  const question = body?.question;
+  if (!question || typeof question !== "string") {
+    const normalized = normalizeValidationFailure("question is required");
+    return NextResponse.json(normalized, { status: normalized.http_status });
+  }
+
+  let resp: Response;
+  try {
+    resp = await fetch(backendRunUrl(), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        question,
+        allow_write: booleanField(body.allow_write, false),
+        dry_run: booleanField(body.dry_run, true),
+        force: booleanField(body.force, false),
+      }),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to reach backend /run";
+    const normalized = normalizeAdapterFailure(message);
+    return NextResponse.json(normalized, { status: normalized.http_status });
+  }
 
   if (!resp.ok) {
     const text = await resp.text();
-    return NextResponse.json({ error: text || resp.statusText }, { status: resp.status });
+    const normalized = normalizeBackendFailure(resp.status, parseUpstreamPayload(text), text || resp.statusText);
+    return NextResponse.json(normalized, { status: resp.status });
   }
 
-  const data = await resp.json();
-  return NextResponse.json({ summary: data.summary ?? data.reason ?? "No response", raw: data });
+  try {
+    const payload = (await resp.json()) as Record<string, unknown>;
+    const result = await loadResultPreview(payload);
+    const normalized = normalizeBackendSuccess(resp.status, payload, result);
+    return NextResponse.json(normalized, { status: resp.status });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Adapter failed to normalize backend response";
+    const normalized = normalizeAdapterFailure(message);
+    return NextResponse.json(normalized, { status: normalized.http_status });
+  }
 }
