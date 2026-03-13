@@ -61,7 +61,7 @@ def _add_shared_arguments(parser: argparse.ArgumentParser) -> None:
         "--show-sql",
         dest="show_sql",
         action="store_true",
-        help="Print executed SQL alongside summary.",
+        help="Print executed SQL alongside the answer.",
     )
 
 
@@ -220,7 +220,7 @@ def _print_result(result, show_trace: bool, show_sql: bool, json_mode: bool = Fa
         return 1
 
     qr = result.query_result
-    print(f"Summary: {qr.summary}")
+    print(f"Answer: {qr.summary}")
     if show_sql:
         print(f"SQL: {qr.sql}")
 

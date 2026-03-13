@@ -34,7 +34,7 @@ def test_result_to_json_includes_structured_read_result(read_agent_ctx) -> None:
     assert result_payload["rows"][0]["name"] == "Alice Johnson"
 
 
-def test_result_to_json_includes_empty_write_result_and_dry_run(db_config, db_handle) -> None:
+def test_result_to_json_includes_write_result_and_dry_run(db_config, db_handle) -> None:
     db_config.allow_write = True
     ctx = AgentContext(
         config=db_config,
@@ -55,4 +55,7 @@ def test_result_to_json_includes_empty_write_result_and_dry_run(db_config, db_ha
     assert payload["ok"] is True
     assert payload["mode"] == "WRITE"
     assert payload["dry_run"] is True
-    assert payload["result"] == {"columns": [], "rows": [], "row_count": 0}
+    assert payload["result"]["columns"] == ["id", "name", "city", "major", "gpa"]
+    assert payload["result"]["row_count"] == 1
+    assert payload["result"]["rows"][0]["name"] == "Alice Johnson"
+    assert payload["result"]["rows"][0]["gpa"] == 3.9

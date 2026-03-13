@@ -114,10 +114,40 @@ def _stringify(value: object) -> str:
     return "None" if value is None else str(value)
 
 
+def _format_preview(values: list[str], total_count: int) -> str:
+    preview = ", ".join(values)
+    extra = total_count - len(values)
+    if extra > 0:
+        return f"{preview}，另外还有 {extra} 个"
+    return preview
+
+
+def _format_row(columns: list[str], row: Sequence[object]) -> str:
+    pairs = [f"{col}={_stringify(val)}" for col, val in zip(columns, row)]
+    return ", ".join(pairs)
+
+
+def _zh_count_phrase(label_source: str, row_count: int) -> str:
+    lowered = label_source.lower().strip()
+    if "student name" in lowered:
+        return f"{row_count} 个学生姓名"
+    if lowered in {"name", "names"} or " name" in lowered:
+        return f"{row_count} 个名字"
+    if "student" in lowered:
+        return f"{row_count} 名学生"
+    if "course" in lowered:
+        return f"{row_count} 门课程"
+    if "city" in lowered or "cities" in lowered:
+        return f"{row_count} 个城市"
+    if "title" in lowered:
+        return f"{row_count} 个标题"
+    return f"{row_count} 条结果"
+
+
 def summarize(question: str, columns: list[str], rows: list[Sequence[object]]) -> str:
-    """Produce a concise, user-facing summary for query results."""
+    """Produce a concise, user-facing answer for query results."""
     if not rows:
-        return f"No results found for '{question}'."
+        return "我没有找到符合条件的结果。"
 
     row_count = len(rows)
     preview_limit = min(_PREVIEW_LIMIT, row_count)
@@ -125,24 +155,19 @@ def summarize(question: str, columns: list[str], rows: list[Sequence[object]]) -
     display_idx = _pick_display_column(question, columns)
     subject = _extract_subject(question)
     label_source = subject or (columns[display_idx].replace("_", " ") if display_idx is not None else "")
-    count_label = _label_for_count(label_source or "result", row_count)
-    prefix = f"{row_count} {count_label}"
+    count_label = _zh_count_phrase(label_source or "result", row_count)
 
     if display_idx is not None:
         values = [_stringify(row[display_idx]) for row in rows[:preview_limit]]
-        preview = ", ".join(values)
-        extra = row_count - preview_limit
-        if extra > 0:
-            preview = f"{preview} (+{extra} more)"
-        return f"{prefix}: {preview}"
+        preview = _format_preview(values, row_count)
+        return f"我找到了 {count_label}：{preview}。"
 
     first_row = rows[0]
-    pairs = [f"{col}: {_stringify(val)}" for col, val in zip(columns, first_row)]
-    example = ", ".join(pairs)
+    example = _format_row(columns, first_row)
 
     if row_count == 1:
-        return f"{prefix}: {example}"
-    return f"{prefix}. Example -> {example}"
+        return f"我找到了 1 条结果：{example}。"
+    return f"我找到了 {row_count} 条结果。第一条是：{example}。"
 
 
 __all__ = ["summarize"]

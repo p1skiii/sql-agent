@@ -6,7 +6,7 @@ from sql_agent_demo.core.summarizer import summarize
 
 def test_summarize_handles_no_rows() -> None:
     summary = summarize("Find students in Seattle", ["name"], [])
-    assert "no results" in summary.lower()
+    assert summary == "我没有找到符合条件的结果。"
 
 
 def test_summarize_with_single_column_rows() -> None:
@@ -15,8 +15,7 @@ def test_summarize_with_single_column_rows() -> None:
 
     summary = summarize("List all student names", columns, rows)
 
-    assert summary.startswith("2 ")
-    assert "student names" in summary.lower()
+    assert summary.startswith("我找到了 2 个学生姓名")
     assert "Alice Johnson" in summary
     assert "Brian Smith" in summary
 
@@ -27,8 +26,7 @@ def test_summarize_with_multiple_columns() -> None:
 
     summary = summarize("List students", columns, rows)
 
-    assert summary.startswith("2 ")
-    assert "students" in summary.lower()
+    assert summary.startswith("我找到了 2 名学生")
     assert "Alice Johnson" in summary
     assert "Brian Smith" in summary
     assert "id" not in summary.lower()
@@ -40,8 +38,8 @@ def test_summarize_truncates_long_lists() -> None:
 
     summary = summarize("List all students", columns, rows)
 
-    assert summary.startswith("12 ")
+    assert summary.startswith("我找到了 12 名学生")
     assert "Student 1" in summary
     assert "Student 10" in summary
     assert "Student 11" not in summary
-    assert "(+2 more)" in summary
+    assert "另外还有 2 个" in summary

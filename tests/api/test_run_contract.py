@@ -45,8 +45,11 @@ def test_run_write_dry_run_success_distinguishes_execution_flags(api_client_fact
     assert body["ok"] is True
     assert body["mode"] == "WRITE"
     assert body["dry_run"] is True
-    assert body["summary"] == "Dry-run: would update 1 row(s)"
-    assert body["result"] == {"columns": [], "rows": [], "row_count": 0}
+    assert body["summary"] == "演练模式：将更新 1 条记录"
+    assert body["result"]["columns"] == ["id", "name", "city", "major", "gpa"]
+    assert body["result"]["row_count"] == 1
+    assert body["result"]["rows"][0]["name"] == "Alice Johnson"
+    assert body["result"]["rows"][0]["gpa"] == pytest.approx(3.9)
 
 
 def test_run_write_commit_success_returns_committed_payload(api_client_factory) -> None:
@@ -69,8 +72,11 @@ def test_run_write_commit_success_returns_committed_payload(api_client_factory) 
     assert body["ok"] is True
     assert body["mode"] == "WRITE"
     assert body["dry_run"] is False
-    assert body["summary"] == "Updated 1 row(s)"
-    assert body["result"] == {"columns": [], "rows": [], "row_count": 0}
+    assert body["summary"] == "已更新 1 条记录"
+    assert body["result"]["columns"] == ["id", "name", "city", "major", "gpa"]
+    assert body["result"]["row_count"] == 1
+    assert body["result"]["rows"][0]["name"] == "Alice Johnson"
+    assert body["result"]["rows"][0]["gpa"] == pytest.approx(3.9)
 
 
 def test_run_unsupported_returns_400_and_contract_body(api_client_factory) -> None:

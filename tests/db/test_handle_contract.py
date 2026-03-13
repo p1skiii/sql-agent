@@ -40,7 +40,7 @@ def test_postgres_handle_exposes_unified_read_and_write_contract(data_dir: Path,
 
     table_info = db_handle.get_table_info()
     columns, rows = db_handle.execute_select("SELECT id, name FROM students ORDER BY id LIMIT 1")
-    affected, last_row_id = db_handle.execute_write(
+    affected, last_row_id, returned_columns, returned_rows = db_handle.execute_write(
         "UPDATE students SET gpa = 3.9 WHERE name = 'Alice Johnson'",
         dry_run=True,
     )
@@ -50,3 +50,5 @@ def test_postgres_handle_exposes_unified_read_and_write_contract(data_dir: Path,
     assert rows == [(1, "Alice Johnson")]
     assert affected == 1
     assert last_row_id is None
+    assert returned_columns is None
+    assert returned_rows is None

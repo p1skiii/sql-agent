@@ -22,7 +22,7 @@ def test_result_to_json_serializes_rows_as_objects_and_extracts_write_flags() ->
             columns=["id", "name"],
             rows=[(1, "Alice Johnson")],
             row_count=1,
-            summary="Updated 1 row(s)",
+            summary="已更新 1 条记录",
             trace=trace,
         ),
         error_message=None,

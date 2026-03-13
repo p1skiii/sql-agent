@@ -425,8 +425,8 @@ def _llm_summarize(
         compact_rows.append({col: row[idx] for idx, col in enumerate(columns)})
 
     system_prompt = (
-        "Provide a concise English answer to the user's question based on the provided rows. "
-        "Keep it under two sentences. Do not repeat the SQL."
+        "请基于提供的查询结果，用简洁自然的中文回答用户问题。"
+        "控制在两句话以内，不要重复 SQL，不要写成机械摘要。"
     )
     user_payload = {
         "question": question,
@@ -992,11 +992,36 @@ def run_write_query(
     user_dry_run = ctx.config.dry_run_default if dry_run is None else dry_run
     is_update_or_delete = gen.sql.strip().lower().startswith(("update", "delete"))
 
+    # Attempt to derive a SELECT statement to track before/after states
+    returning_sql = None
+    if is_update_or_delete:
+        m_update = re.match(r"(?i)\s*update\s+([a-zA-Z0-9_\-\"\'\`\[\]]+)\s+set\s+(.*?)\s+(where\s+.*)", gen.sql)
+        m_delete = re.match(r"(?i)\s*delete\s+from\s+([a-zA-Z0-9_\-\"\'\`\[\]]+)\s+(where\s+.*)", gen.sql)
+        if m_update:
+            returning_sql = f"SELECT * FROM {m_update.group(1)} {m_update.group(3)}"
+        elif m_delete:
+            returning_sql = f"SELECT * FROM {m_delete.group(1)} {m_delete.group(2)}"
+
+    before_columns, before_rows = [], []
+    after_columns, after_rows = [], []
+
+    if returning_sql:
+        try:
+            b_cols, b_rows = ctx.db_handle.execute_select(returning_sql)
+            before_columns = list(b_cols)
+            before_rows = list(b_rows)
+        except Exception:
+            pass
+
     # Probe updates/deletes to detect wide impact unless guard is off
     probe_affected = None
     if is_update_or_delete and ctx.config.guard_level != "off":
         try:
-            probe_affected, _ = ctx.db_handle.execute_write(gen.sql, dry_run=True, require_where=require_where)
+            probe_affected, _, _, _ = ctx.db_handle.execute_write(
+                gen.sql,
+                dry_run=True,
+                require_where=require_where,
+            )
             traces.append(
                 StepTrace(
                     name="execute_write_probe",
@@ -1025,11 +1050,15 @@ def run_write_query(
     final_dry_run = user_dry_run
 
     try:
-        affected, last_row_id = ctx.db_handle.execute_write(
+        affected, last_row_id, r_cols, r_rows = ctx.db_handle.execute_write(
             gen.sql,
             dry_run=final_dry_run,
             require_where=require_where,
+            returning_sql=returning_sql,
         )
+        if r_cols is not None and r_rows is not None:
+            after_columns = list(r_cols)
+            after_rows = list(r_rows)
     except DbExecutionError as exc:
         return TaskResult(
             intent=intent,
@@ -1054,30 +1083,32 @@ def run_write_query(
     action = _action_from_sql(gen.sql)
     if action == "delete":
         if final_dry_run:
-            summary = f"Dry-run: would delete {affected} row(s)"
+            summary = f"演练模式：将删除 {affected} 条记录"
         else:
-            summary = f"Deleted {affected} row(s)"
+            summary = f"已删除 {affected} 条记录"
     elif action == "update":
         if final_dry_run:
-            summary = f"Dry-run: would update {affected} row(s)"
+            summary = f"演练模式：将更新 {affected} 条记录"
         else:
-            summary = f"Updated {affected} row(s)"
+            summary = f"已更新 {affected} 条记录"
     else:
-        state = "Dry-run" if final_dry_run else "Committed"
-        summary = f"{state}: {affected} row(s) affected"
+        state = "演练模式" if final_dry_run else "已提交"
+        summary = f"{state}：影响了 {affected} 条记录"
         if last_row_id and affected > 0:
             summary = f"{summary}; last_row_id={last_row_id}"
     if probe_affected is not None and final_dry_run and probe_affected != affected:
-        summary = f"{summary} (probe_rows={probe_affected})"
+        summary = f"{summary}（预估影响 {probe_affected} 条）"
 
     return TaskResult(
         intent=intent,
         status=TaskStatus.SUCCESS,
         query_result=QueryResult(
             sql=gen.sql,
-            row_count=0,
-            columns=[],
-            rows=[],
+            row_count=affected,
+            columns=after_columns,
+            rows=after_rows,
+            before_columns=before_columns,
+            before_rows=before_rows,
             summary=summary,
             trace=traces if ctx.config.allow_trace else None,
         ),

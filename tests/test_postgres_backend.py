@@ -29,12 +29,14 @@ def test_postgres_read_and_minimal_write_dry_run(data_dir: Path, postgres_url: s
     assert columns == ["id", "name"]
     assert rows[0][1] == "Alice Johnson"
 
-    affected, last_row_id = db_handle.execute_write(
+    affected, last_row_id, returned_columns, returned_rows = db_handle.execute_write(
         "UPDATE students SET gpa = 3.9 WHERE name = 'Alice Johnson'",
         dry_run=True,
     )
     assert affected == 1
     assert last_row_id is None
+    assert returned_columns is None
+    assert returned_rows is None
 
     _, verify_rows = db_handle.execute_select("SELECT gpa FROM students WHERE name = 'Alice Johnson'")
     assert verify_rows[0][0] == pytest.approx(3.8)

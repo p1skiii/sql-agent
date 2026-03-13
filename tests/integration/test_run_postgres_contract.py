@@ -37,7 +37,7 @@ def test_run_postgres_read_success_returns_result_objects(
     assert body["result"]["row_count"] == 2
 
 
-def test_run_postgres_write_dry_run_keeps_result_shape(
+def test_run_postgres_write_dry_run_returns_affected_rows(
     api_client_factory,
     data_dir: Path,
     postgres_url: str,
@@ -69,4 +69,7 @@ def test_run_postgres_write_dry_run_keeps_result_shape(
     assert body["ok"] is True
     assert body["mode"] == "WRITE"
     assert body["dry_run"] is True
-    assert body["result"] == {"columns": [], "rows": [], "row_count": 0}
+    assert body["result"]["columns"] == ["id", "name", "city", "major", "gpa"]
+    assert body["result"]["row_count"] == 1
+    assert body["result"]["rows"][0]["name"] == "Alice Johnson"
+    assert body["result"]["rows"][0]["gpa"] == pytest.approx(3.9)
