@@ -66,6 +66,8 @@ class AgentConfig:
     max_summary_tokens: int | None = None
     sql_default_limit: int = 50
     allow_trace: bool = False
+    db_backend: str = "sqlite"
+    db_url: str | None = None
     db_path: str = "./sandbox/sandbox.db"
     schema_path: str = "./schema.sql"
     seed_path: str = "./seed.sql"
@@ -73,12 +75,16 @@ class AgentConfig:
     intent_model_name: str = "gpt-4o-mini"
     sql_model_name: str = "gpt-4o-mini"
     selfcheck_enabled: bool = False
+    allow_repair: bool = True
+    schema_truncate_chars: int = 12000
     language: str = "en"
     allow_llm_summary: bool = False
     allow_write: bool = False
     require_where: bool = True
     dry_run_default: bool = True
     allow_force: bool = False
+    guard_level: str = "strict"  # strict | loose | off
+    schema_mode: str = "topk"  # topk | full
 
 
 @dataclass
@@ -105,9 +111,12 @@ class StepTrace:
 @dataclass
 class QueryResult:
     sql: str
-    columns: List[str]
-    rows: List[Sequence[Any]]
-    summary: str
+    raw_sql: str | None = None
+    repaired_sql: str | None = None
+    row_count: int = 0
+    columns: List[str] = None  # type: ignore
+    rows: List[Sequence[Any]] = None  # type: ignore
+    summary: str = ""
     trace: List[StepTrace] | None = None
 
 

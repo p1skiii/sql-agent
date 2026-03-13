@@ -108,10 +108,10 @@ def select_schema_subset(question: str, full_schema: str, top_k: int = 3, max_co
 
 
 def _generate_sql_with_llm(
-    question: str, schema_snippet: str, model: Any, top_k: int, strict: bool = False
+    question: str, schema_snippet: str, model: Any, top_k: int, dialect: str, strict: bool = False
 ) -> SqlGenerationResult | None:
     system_prompt = (
-        "You are an expert SQL assistant. Generate a single SQL query that answers the user's question. "
+        f"You are an expert SQL assistant. Generate a single {dialect}-compatible SQL query that answers the user's question. "
         "Rules: only output one SELECT statement; do not include any write operations (INSERT, UPDATE, DELETE, DROP, "
         "ALTER, TRUNCATE, CREATE). If the request is not read-only, respond with ONLY_READ_ONLY_SUPPORTED. "
         "Do not fabricate columns or return hard-coded placeholder values; always select real columns such as instructor when asked. "
@@ -156,10 +156,10 @@ def _generate_sql_with_llm(
 
 
 def _generate_write_sql(
-    question: str, schema_snippet: str, model: Any, top_k: int
+    question: str, schema_snippet: str, model: Any, top_k: int, dialect: str
 ) -> SqlGenerationResult | None:
     system_prompt = (
-        "You are an expert SQL assistant. Generate ONE safe data-modifying statement (INSERT, UPDATE, or DELETE). "
+        f"You are an expert SQL assistant. Generate ONE safe {dialect}-compatible data-modifying statement (INSERT, UPDATE, or DELETE). "
         "Rules: only one statement; UPDATE/DELETE must include a WHERE clause; never use DROP/ALTER/TRUNCATE/DDL; "
         "do not fabricate columns; respond ONLY with JSON: {\"sql\": \"...\", \"tables\": [\"...\"], \"assumptions\": \"...\"}."
     )
@@ -273,6 +273,94 @@ def _shape_sql(sql: str, question: str, default_limit: int) -> tuple[str, str | 
     return shaped, note
 
 
+def _quote_table_identifiers(sql: str) -> str:
+    """Quote table names that contain hyphens or start with digits to avoid SQLite syntax errors."""
+    def repl(match):
+        name = match.group(1)
+        stripped = name.strip()
+        if stripped.startswith(("\"", "`", "[")):
+            return match.group(0)  # already quoted
+        if any(ch in stripped for ch in "- ") or stripped[:1].isdigit():
+            return match.group(0).replace(name, f'"{stripped}"', 1)
+        return match.group(0)
+
+    sql = re.sub(r"(?i)from\\s+([\\w\\-\\.]+)", repl, sql)
+    sql = re.sub(r"(?i)join\\s+([\\w\\-\\.]+)", repl, sql)
+    return sql
+
+
+def _quote_column_identifiers(sql: str) -> str:
+    """
+    Quote column identifiers that contain spaces, slashes, dashes or start with digits.
+    Applies in SELECT list and common clauses (WHERE/GROUP/ORDER/HAVING/UNION).
+    """
+    def quote_ident(ident: str) -> str:
+        ident = ident.strip()
+        if not ident:
+            return ident
+        if ident.startswith(("\"", "`", "[")):
+            return ident
+        if any(ch in ident for ch in (" ", "-", "/", "\\")) or ident[:1].isdigit():
+            return f'"{ident}"'
+        return ident
+
+    # Quote table names in FROM/JOIN clauses when they include special chars
+    def repl_table(match):
+        table = match.group(2)
+        alias = match.group(3) or ""
+        if table.startswith("("):
+            return match.group(0)
+        return f"{match.group(1)} {quote_ident(table)}{alias}"
+
+    sql = re.sub(r"(?i)\b(from|join)\s+([`\"\[]?[\w.\-/]+[`\"\]]?)(\s+(?:as\s+)?[\w]+)?",
+                 repl_table, sql)
+
+    # Quote columns in SELECT list
+    def repl_select(match):
+        cols = match.group(1)
+        parts = []
+        for part in cols.split(","):
+            if " as " in part.lower():
+                left, right = re.split("(?i)\\s+as\\s+", part, maxsplit=1)
+                parts.append(f"{quote_ident(left)} AS {quote_ident(right)}")
+            else:
+                parts.append(quote_ident(part))
+        return "SELECT " + ", ".join(parts) + " FROM"
+
+    sql = re.sub(r"(?is)select\\s+(.*?)\\s+from", repl_select, sql, count=1)
+
+    # Quote simple WHERE/GROUP/ORDER/HAVING column patterns
+    def repl_clause(match):
+        col = quote_ident(match.group(1))
+        op = match.group(2)
+        rest = match.group(3)
+        return f" {col} {op}{rest}"
+    sql = re.sub(r"(\s)([\w.\-/]+)\s*(=|>|<|>=|<=|!=|like|in|between)(\s)",
+                 lambda m: f"{m.group(1)}{quote_ident(m.group(2))} {m.group(3)}{m.group(4)}",
+                 sql, flags=re.IGNORECASE)
+    sql = re.sub(r"(?i)(group by|order by|having)\s+([\w.\-/, ]+)",
+                 lambda m: m.group(1) + " " + ", ".join(quote_ident(p) for p in m.group(2).split(",")), sql)
+
+    return sql
+
+
+def _apply_sqlite_compat_rewrite(sql: str) -> str:
+    sql = re.sub(r"(?i)year\(([^)]+)\)", r"strftime('%Y', \1)", sql)
+    sql = re.sub(r"(?i)month\(([^)]+)\)", r"strftime('%m', \1)", sql)
+    sql = re.sub(r"(?i)date_format\(([^,]+),\s*'%%Y-%%m-%%d'\)", r"date(\1)", sql)
+    return sql
+
+
+def _backend_sql_dialect(db_backend: str) -> str:
+    return "PostgreSQL" if str(db_backend).lower() == "postgres" else "SQLite"
+
+
+def _rewrite_sql_for_backend(sql: str, db_backend: str) -> str:
+    if str(db_backend).lower() == "sqlite":
+        return _apply_sqlite_compat_rewrite(sql)
+    return sql
+
+
 def _shape_student_insert(sql: str) -> tuple[str, str | None]:
     """Ensure INSERT into students includes required NOT NULL columns with defaults."""
     pattern = re.compile(
@@ -337,8 +425,8 @@ def _llm_summarize(
         compact_rows.append({col: row[idx] for idx, col in enumerate(columns)})
 
     system_prompt = (
-        "Provide a concise English answer to the user's question based on the provided rows. "
-        "Keep it under two sentences. Do not repeat the SQL."
+        "请基于提供的查询结果，用简洁自然的中文回答用户问题。"
+        "控制在两句话以内，不要重复 SQL，不要写成机械摘要。"
     )
     user_payload = {
         "question": question,
@@ -440,7 +528,14 @@ def _selfcheck_sql(question: str, sql: str, model: Any | None) -> SelfCheckResul
     )
 
 
-def repair_sql(question: str, sql: str, error_message: str, schema_snippet: str, model: Any) -> str | None:
+def repair_sql(
+    question: str,
+    sql: str,
+    error_message: str,
+    schema_snippet: str,
+    model: Any,
+    dialect: str,
+) -> str | None:
     """Attempt a single-shot SQL repair via LLM JSON output."""
     payload = model.generate_json(
         [
@@ -448,7 +543,8 @@ def repair_sql(question: str, sql: str, error_message: str, schema_snippet: str,
                 "role": "system",
                 "content": (
                     "You are fixing a SQL query that failed to execute. Return ONLY JSON: "
-                    '{"sql": "...", "reason": "..."} with a corrected SELECT-only statement.'
+                    '{"sql": "...", "reason": "..."} with a corrected '
+                    f"{dialect}-compatible SELECT-only statement."
                 ),
             },
             {
@@ -497,8 +593,16 @@ def run_read_query(
 
     full_schema = ctx.db_handle.get_table_info()
     max_cols = 3 if intent == IntentType.READ_SIMPLE else 5
-    schema_snippet = select_schema_subset(question, full_schema, ctx.config.top_k, max_columns=max_cols)
+    if ctx.config.schema_mode == "full":
+        schema_snippet = full_schema
+        limit = ctx.config.schema_truncate_chars or 12000
+        if len(schema_snippet) > limit:
+            schema_snippet = schema_snippet[:limit]
+            traces.append(StepTrace(name="schema_truncate", output_preview=f"full_schema truncated to {limit} chars"))
+    else:
+        schema_snippet = select_schema_subset(question, full_schema, ctx.config.top_k, max_columns=max_cols)
     traces.append(StepTrace(name="load_schema", output_preview=_preview(schema_snippet)))
+    traces.append(StepTrace(name="guard_config", output_preview=f"guard_level={ctx.config.guard_level}"))
 
     attempted_strict = False
     while True:
@@ -507,6 +611,7 @@ def run_read_query(
             schema_snippet,
             ctx.sql_model,
             ctx.config.top_k,
+            _backend_sql_dialect(ctx.config.db_backend),
             strict=attempted_strict,
         )
         if not gen:
@@ -518,6 +623,10 @@ def run_read_query(
                 raw_question=question,
                 trace=traces,
             )
+        raw_sql = gen.sql
+        gen.sql = _quote_table_identifiers(gen.sql)
+        gen.sql = _quote_column_identifiers(gen.sql)
+        gen.sql = _rewrite_sql_for_backend(gen.sql, ctx.config.db_backend)
         shaped_sql, shape_note = _shape_sql(gen.sql, question, ctx.config.sql_default_limit)
         if shape_note:
             traces.append(StepTrace(name="shape_sql", output_preview=_preview(shaped_sql), notes=shape_note))
@@ -539,7 +648,7 @@ def run_read_query(
                 error_message=err,
                 raw_question=question,
                 trace=traces,
-        )
+            )
 
         wants_instructor = any(word in question.lower() for word in ("instructor", "teacher", "professor"))
         schema_has_instructor = _schema_has_column(full_schema, "instructor")
@@ -610,12 +719,28 @@ def run_read_query(
             trace=traces,
         )
 
-    validate_readonly_sql(gen.sql)
+    validate_readonly_sql(gen.sql, guard_level=ctx.config.guard_level)
 
     try:
         columns, all_rows = ctx.db_handle.execute_select(gen.sql)
     except DbExecutionError as exc:
-        repair_sql_text = repair_sql(question, gen.sql, exc.inner_message, schema_snippet, ctx.sql_model)
+        if not ctx.config.allow_repair:
+            return TaskResult(
+                intent=intent,
+                status=TaskStatus.ERROR,
+                query_result=None,
+                error_message=exc.inner_message,
+                raw_question=question,
+                trace=traces,
+            )
+        repair_sql_text = repair_sql(
+            question,
+            gen.sql,
+            exc.inner_message,
+            schema_snippet,
+            ctx.sql_model,
+            _backend_sql_dialect(ctx.config.db_backend),
+        )
         if not repair_sql_text:
             return TaskResult(
                 intent=intent,
@@ -626,7 +751,7 @@ def run_read_query(
                 trace=traces,
             )
 
-        validate_readonly_sql(repair_sql_text)
+        validate_readonly_sql(repair_sql_text, guard_level=ctx.config.guard_level)
         traces.append(
             StepTrace(
                 name="repair_sql",
@@ -684,7 +809,16 @@ def run_read_query(
             return TaskResult(
                 intent=intent,
                 status=TaskStatus.ERROR,
-                query_result=None,
+                query_result=QueryResult(
+                    sql=repair_sql_text,
+                    raw_sql=raw_sql,
+                    repaired_sql=repair_sql_text,
+                    row_count=0,
+                    columns=[],
+                    rows=[],
+                    summary="",
+                    trace=traces if ctx.config.allow_trace else None,
+                ),
                 error_message="Failed to execute repaired SQL.",
                 raw_question=question,
                 trace=traces,
@@ -738,6 +872,9 @@ def run_read_query(
         status=TaskStatus.SUCCESS,
         query_result=QueryResult(
             sql=gen.sql,
+            raw_sql=raw_sql,
+            repaired_sql=gen.sql if gen.sql != raw_sql else None,
+            row_count=row_count,
             columns=list(columns),
             rows=list(rows),
             summary=summary,
@@ -785,10 +922,23 @@ def run_write_query(
         )
 
     full_schema = ctx.db_handle.get_table_info()
-    schema_snippet = select_schema_subset(question, full_schema, ctx.config.top_k, max_columns=5)
+    if ctx.config.schema_mode == "full":
+        schema_snippet = full_schema
+        if len(schema_snippet) > 12000:
+            schema_snippet = schema_snippet[:12000]
+            traces.append(StepTrace(name="schema_truncate", output_preview="full_schema truncated to 12000 chars"))
+    else:
+        schema_snippet = select_schema_subset(question, full_schema, ctx.config.top_k, max_columns=5)
     traces.append(StepTrace(name="load_schema", output_preview=_preview(schema_snippet)))
+    traces.append(StepTrace(name="guard_config", output_preview=f"guard_level={ctx.config.guard_level} require_where={ctx.config.require_where}")) 
 
-    gen = _generate_write_sql(question, schema_snippet, ctx.sql_model, ctx.config.top_k)
+    gen = _generate_write_sql(
+        question,
+        schema_snippet,
+        ctx.sql_model,
+        ctx.config.top_k,
+        _backend_sql_dialect(ctx.config.db_backend),
+    )
     if not gen:
         return TaskResult(
             intent=intent,
@@ -800,6 +950,9 @@ def run_write_query(
         )
 
     shape_note = None
+    gen.sql = _quote_table_identifiers(gen.sql)
+    gen.sql = _quote_column_identifiers(gen.sql)
+    gen.sql = _rewrite_sql_for_backend(gen.sql, ctx.config.db_backend)
     if "insert into students" in gen.sql.lower():
         gen.sql, shape_note = _shape_student_insert(gen.sql)
 
@@ -839,11 +992,36 @@ def run_write_query(
     user_dry_run = ctx.config.dry_run_default if dry_run is None else dry_run
     is_update_or_delete = gen.sql.strip().lower().startswith(("update", "delete"))
 
-    # Always probe updates/deletes to detect wide impact
-    probe_affected = None
+    # Attempt to derive a SELECT statement to track before/after states
+    returning_sql = None
     if is_update_or_delete:
+        m_update = re.match(r"(?i)\s*update\s+([a-zA-Z0-9_\-\"\'\`\[\]]+)\s+set\s+(.*?)\s+(where\s+.*)", gen.sql)
+        m_delete = re.match(r"(?i)\s*delete\s+from\s+([a-zA-Z0-9_\-\"\'\`\[\]]+)\s+(where\s+.*)", gen.sql)
+        if m_update:
+            returning_sql = f"SELECT * FROM {m_update.group(1)} {m_update.group(3)}"
+        elif m_delete:
+            returning_sql = f"SELECT * FROM {m_delete.group(1)} {m_delete.group(2)}"
+
+    before_columns, before_rows = [], []
+    after_columns, after_rows = [], []
+
+    if returning_sql:
         try:
-            probe_affected, _ = ctx.db_handle.execute_write(gen.sql, dry_run=True, require_where=require_where)
+            b_cols, b_rows = ctx.db_handle.execute_select(returning_sql)
+            before_columns = list(b_cols)
+            before_rows = list(b_rows)
+        except Exception:
+            pass
+
+    # Probe updates/deletes to detect wide impact unless guard is off
+    probe_affected = None
+    if is_update_or_delete and ctx.config.guard_level != "off":
+        try:
+            probe_affected, _, _, _ = ctx.db_handle.execute_write(
+                gen.sql,
+                dry_run=True,
+                require_where=require_where,
+            )
             traces.append(
                 StepTrace(
                     name="execute_write_probe",
@@ -872,11 +1050,15 @@ def run_write_query(
     final_dry_run = user_dry_run
 
     try:
-        affected, last_row_id = ctx.db_handle.execute_write(
+        affected, last_row_id, r_cols, r_rows = ctx.db_handle.execute_write(
             gen.sql,
             dry_run=final_dry_run,
             require_where=require_where,
+            returning_sql=returning_sql,
         )
+        if r_cols is not None and r_rows is not None:
+            after_columns = list(r_cols)
+            after_rows = list(r_rows)
     except DbExecutionError as exc:
         return TaskResult(
             intent=intent,
@@ -901,29 +1083,32 @@ def run_write_query(
     action = _action_from_sql(gen.sql)
     if action == "delete":
         if final_dry_run:
-            summary = f"Dry-run: would delete {affected} row(s)"
+            summary = f"演练模式：将删除 {affected} 条记录"
         else:
-            summary = f"Deleted {affected} row(s)"
+            summary = f"已删除 {affected} 条记录"
     elif action == "update":
         if final_dry_run:
-            summary = f"Dry-run: would update {affected} row(s)"
+            summary = f"演练模式：将更新 {affected} 条记录"
         else:
-            summary = f"Updated {affected} row(s)"
+            summary = f"已更新 {affected} 条记录"
     else:
-        state = "Dry-run" if final_dry_run else "Committed"
-        summary = f"{state}: {affected} row(s) affected"
+        state = "演练模式" if final_dry_run else "已提交"
+        summary = f"{state}：影响了 {affected} 条记录"
         if last_row_id and affected > 0:
             summary = f"{summary}; last_row_id={last_row_id}"
     if probe_affected is not None and final_dry_run and probe_affected != affected:
-        summary = f"{summary} (probe_rows={probe_affected})"
+        summary = f"{summary}（预估影响 {probe_affected} 条）"
 
     return TaskResult(
         intent=intent,
         status=TaskStatus.SUCCESS,
         query_result=QueryResult(
             sql=gen.sql,
-            columns=[],
-            rows=[],
+            row_count=affected,
+            columns=after_columns,
+            rows=after_rows,
+            before_columns=before_columns,
+            before_rows=before_rows,
             summary=summary,
             trace=traces if ctx.config.allow_trace else None,
         ),

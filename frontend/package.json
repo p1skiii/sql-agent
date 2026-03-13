@@ -1,0 +1,33 @@
+{
+  "name": "sql-agent-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "test": "playwright test",
+    "test:frontend": "playwright test",
+    "test:smoke": "playwright test -c playwright.smoke.config.ts",
+    "test:smoke:postgres": "SMOKE_DB_BACKEND=postgres playwright test -c playwright.smoke.config.ts",
+    "test:adapter": "node --experimental-strip-types --loader ./tests/next-server-loader.mjs --test ./tests/normalize-contract.test.ts ./tests/query-result.test.ts ./tests/route-contract.test.ts",
+    "test:adapter:real": "node --experimental-strip-types --loader ./tests/next-server-loader.mjs --test ./tests/route-contract.real.test.ts",
+    "samples:adapter": "node --experimental-strip-types --loader ./tests/next-server-loader.mjs ./scripts/generate-adapter-samples.ts"
+  },
+  "dependencies": {
+    "next": "16.0.10",
+    "react": "19.0.1",
+    "react-dom": "19.0.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.51.0",
+    "@types/node": "22.13.10",
+    "@types/react": "18.3.18",
+    "@types/react-dom": "18.3.5",
+    "autoprefixer": "10.4.20",
+    "postcss": "8.5.3",
+    "tailwindcss": "3.4.14",
+    "typescript": "5.8.2"
+  },
+  "packageManager": "pnpm@10.28.0+sha512.05df71d1421f21399e053fde567cea34d446fa02c76571441bfc1c7956e98e363088982d940465fd34480d4d90a0668bc12362f8aa88000a64e83d0b0e47be48"
+}

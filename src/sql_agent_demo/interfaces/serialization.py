@@ -15,13 +15,31 @@ def _extract_affected(trace_steps: list[StepTrace]) -> tuple[Optional[int], Opti
     dry_run = None
     for step in trace_steps:
         if step.name in ("execute_write", "execute_write_probe") and step.output_preview:
-            m = re.search(r"affected_rows=(\\d+)", step.output_preview)
+            m = re.search(r"affected_rows=(\d+)", step.output_preview)
             if m:
                 affected = int(m.group(1))
             m2 = re.search(r"dry_run=(true|false)", step.output_preview, flags=re.IGNORECASE)
             if m2:
                 dry_run = m2.group(1).lower() == "true"
     return affected, dry_run
+
+
+def _serialize_result(query_result) -> dict | None:
+    if query_result is None:
+        return None
+
+    columns = list(query_result.columns or [])
+    rows = list(query_result.rows or [])
+    row_objects = []
+    for row in rows:
+        row_objects.append({column: row[idx] if idx < len(row) else None for idx, column in enumerate(columns)})
+
+    row_count = query_result.row_count if getattr(query_result, "row_count", None) is not None else len(row_objects)
+    return {
+        "columns": columns,
+        "rows": row_objects,
+        "row_count": row_count,
+    }
 
 
 def _diagnose(result) -> dict:
@@ -49,7 +67,10 @@ def result_to_json(result, show_sql: bool) -> dict:
         "question": result.raw_question,
         "status": result.status.value,
         "sql": (result.query_result.sql if result.query_result and show_sql else None),
+        "raw_sql": result.query_result.raw_sql if result.query_result else None,
+        "repaired_sql": result.query_result.repaired_sql if result.query_result else None,
         "summary": result.query_result.summary if result.query_result else None,
+        "result": _serialize_result(result.query_result),
         "error_code": result.status.value if result.status != TaskStatus.SUCCESS else None,
         "reason": result.error_message,
         "affected_rows": affected_rows,

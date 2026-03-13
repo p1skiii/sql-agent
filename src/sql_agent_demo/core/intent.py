@@ -42,7 +42,17 @@ def detect_intent(question: str, model: Any | None) -> IntentType:
         payload = {}
 
     label = payload.get("label") if isinstance(payload, dict) else None
-    return _map_label_to_intent(str(label) if label is not None else "")
+    intent = _map_label_to_intent(str(label) if label is not None else "")
+    if intent != IntentType.UNSUPPORTED:
+        return intent
+
+    # Fallback heuristic if model returns nothing
+    ql = question.lower()
+    if any(k in ql for k in ("insert", "update", "delete", "remove", "add", "create")):
+        return IntentType.WRITE
+    if any(k in ql for k in ("sum", "average", "avg", "count", "group by", "aggregate")):
+        return IntentType.READ_ANALYTIC
+    return IntentType.READ_SIMPLE
 
 
 __all__ = ["detect_intent"]
