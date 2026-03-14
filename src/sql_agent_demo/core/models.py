@@ -116,6 +116,8 @@ class QueryResult:
     row_count: int = 0
     columns: List[str] = None  # type: ignore
     rows: List[Sequence[Any]] = None  # type: ignore
+    before_columns: List[str] | None = None
+    before_rows: List[Sequence[Any]] | None = None
     summary: str = ""
     trace: List[StepTrace] | None = None
 

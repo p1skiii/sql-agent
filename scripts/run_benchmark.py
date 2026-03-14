@@ -187,7 +187,6 @@ def main():
             last50.append(200 if result.status.name == "SUCCESS" else 400)
             stop_for_rates()
             guard_rule_id, guard_kind = classify_guard(result.error_message)
-            guard_rule_id, guard_kind = classify_guard(msg)
             obj = {
                 "id": item.get("id"),
                 "dataset": dataset_name,

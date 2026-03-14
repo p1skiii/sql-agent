@@ -1,4 +1,4 @@
-# Tests PostgreSQL initialization, read execution, and minimal write dry-run.
+# Tests PostgreSQL business-demo initialization, read execution, and minimal write dry-run.
 from __future__ import annotations
 
 from pathlib import Path
@@ -25,12 +25,14 @@ def test_postgres_read_and_minimal_write_dry_run(data_dir: Path, postgres_url: s
 
     db_handle = init_sandbox_db(cfg)
 
-    columns, rows = db_handle.execute_select("SELECT id, name FROM students ORDER BY id")
-    assert columns == ["id", "name"]
-    assert rows[0][1] == "Alice Johnson"
+    columns, rows = db_handle.execute_select(
+        "SELECT p.sku, p.name, i.quantity FROM products p JOIN inventory i ON i.product_id = p.id ORDER BY p.id"
+    )
+    assert columns == ["sku", "name", "quantity"]
+    assert rows[0] == ("LAP-001", "Aurora Pro 14", 12)
 
     affected, last_row_id, returned_columns, returned_rows = db_handle.execute_write(
-        "UPDATE students SET gpa = 3.9 WHERE name = 'Alice Johnson'",
+        "UPDATE inventory SET quantity = 15 WHERE product_id = 1",
         dry_run=True,
     )
     assert affected == 1
@@ -38,5 +40,5 @@ def test_postgres_read_and_minimal_write_dry_run(data_dir: Path, postgres_url: s
     assert returned_columns is None
     assert returned_rows is None
 
-    _, verify_rows = db_handle.execute_select("SELECT gpa FROM students WHERE name = 'Alice Johnson'")
-    assert verify_rows[0][0] == pytest.approx(3.8)
+    _, verify_rows = db_handle.execute_select("SELECT quantity FROM inventory WHERE product_id = 1")
+    assert verify_rows[0][0] == 12

@@ -1,10 +1,14 @@
 # SQL Agent
 
-Read/write-guarded NL to SQL over PostgreSQL or SQLite, with a Flask backend and a Next.js frontend. PostgreSQL is the recommended runtime path. SQLite remains available as a fallback.
+Read/write-guarded NL to SQL over PostgreSQL or SQLite, with a Flask backend and a Next.js frontend.
+
+- PostgreSQL is the business-demo database for the web app, integration flow, and defense/demo screenshots.
+- SQLite is the experiment database for CLI validation, Spider-style runs, benchmark scripts, and low-cost debugging.
 
 ## Recommended Entry Points
-- CLI: `uv run sql-agent "List the ids and names of all students." --show-sql`
+- Business demo CLI: `uv run sql-agent "Show the inventory for all laptop products." --show-sql`
 - API: `uv run sql-agent-api --host 127.0.0.1 --port 8000`
+- SQLite experiment CLI: `uv run sql-agent experiment-run-file configs/queries/sqlite_smoke.yaml --db-path ./sandbox/sandbox.db`
 
 Legacy compatibility:
 - `uv run sql-agent-demo ...` still works, but it is no longer the primary documented entry.

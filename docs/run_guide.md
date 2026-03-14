@@ -15,7 +15,7 @@
    ```bash
    docker compose -f docker-compose.postgres.yml up -d postgres
    ```
-4. Start the backend:
+4. Start the backend for the business-demo path:
    ```bash
    uv run sql-agent-api --host 127.0.0.1 --port 8000
    ```
@@ -33,7 +33,7 @@
 | --- | --- | --- | --- |
 | `LLM_API_KEY` | backend | yes | API key or proxy token for the OpenAI-compatible endpoint |
 | `LLM_BASE_URL` | backend | no | Documented default is `http://localhost:4141/v1` |
-| `SQL_AGENT_DB_BACKEND` | backend | no | Code default is `sqlite`; documented main path is `postgres` |
+| `SQL_AGENT_DB_BACKEND` | backend | no | `postgres` for the business demo, `sqlite` for the experiment path |
 | `SQL_AGENT_DB_URL` | backend | required for PostgreSQL | PostgreSQL DSN |
 | `SQL_AGENT_DB_PATH` | backend | required for SQLite fallback | SQLite file path |
 | `SQL_AGENT_SCHEMA_PATH` | backend | no | Schema SQL path |
@@ -47,7 +47,7 @@
 - If the proxy is not running, backend requests fail with a connection error from the model client.
 - If the proxy is running but the key or route is invalid, the backend fails during model calls with an upstream auth or HTTP error.
 
-### PostgreSQL Main Path
+### PostgreSQL Business-Demo Path
 1. Start PostgreSQL:
    ```bash
    docker compose -f docker-compose.postgres.yml up -d postgres
@@ -56,6 +56,8 @@
    ```bash
    SQL_AGENT_DB_BACKEND=postgres
    SQL_AGENT_DB_URL=postgresql+psycopg://sql_agent:sql_agent@127.0.0.1:15432/sql_agent_demo
+   SQL_AGENT_SCHEMA_PATH=./schema.postgres.sql
+   SQL_AGENT_SEED_PATH=./seed.postgres.sql
    ```
 3. Start the backend API:
    ```bash
@@ -63,28 +65,32 @@
    ```
 4. Verify a READ through the CLI:
    ```bash
-   uv run sql-agent "List the ids and names of all students." --show-sql
+   uv run sql-agent "Show the inventory for all laptop products." --show-sql
    ```
 5. Verify a WRITE dry-run:
    ```bash
-   uv run sql-agent write "Update the student named Alice Johnson to have GPA 3.9." --allow-write
+   uv run sql-agent write "Update the inventory quantity for product LAP-001 to 15." --allow-write
    ```
 6. Verify a WRITE commit:
    ```bash
-   uv run sql-agent write "Update the student named Alice Johnson to have GPA 3.9." --allow-write --dry-run=false
+   uv run sql-agent write "Update the inventory quantity for product LAP-001 to 15." --allow-write --dry-run=false
    ```
 
-### SQLite Fallback
-- Switch only these variables:
+### SQLite Experiment Path
+- Switch to SQLite only when you want the experiment / CLI / benchmark line:
   ```bash
   SQL_AGENT_DB_BACKEND=sqlite
   SQL_AGENT_DB_PATH=./sandbox/sandbox.db
   ```
-- Then start the same backend command:
+- Run the named experiment CLI workflow:
   ```bash
-  uv run sql-agent-api --host 127.0.0.1 --port 8000
+  uv run sql-agent experiment-run-file configs/queries/sqlite_smoke.yaml --db-path ./sandbox/sandbox.db
   ```
-- The backend will use `schema.sql` and `seed.sql` for SQLite initialization.
+- Run the benchmark / Spider-style path:
+  ```bash
+  uv run python scripts/run_benchmark.py --config configs/eval/sqlite_spider.yaml --dataset datasets/spider/dev.jsonl --tag sqlite_spider
+  ```
+- SQLite remains out of the web demo on purpose.
 
 ### Frontend Connection
 - The frontend talks to the backend through `SQL_AGENT_RUN_URL`.
@@ -99,7 +105,7 @@
   ```bash
   curl -s http://127.0.0.1:8000/run \
     -H 'Content-Type: application/json' \
-    -d '{"question":"List the ids and names of all students.","allow_write":false,"dry_run":true}'
+    -d '{"question":"Show the inventory for all laptop products.","allow_write":false,"dry_run":true}'
   ```
 - READ success should return `status=SUCCESS` and a structured `result` object with `columns`, `rows`, and `row_count`.
 

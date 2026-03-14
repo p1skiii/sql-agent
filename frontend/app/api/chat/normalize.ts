@@ -19,6 +19,7 @@ export interface NormalizedChatData {
   db_executed: boolean;
   committed: boolean | null;
   result: ResultPreview;
+  before_result?: ResultPreview | null;
   trace: unknown[];
 }
 
@@ -118,6 +119,8 @@ export function normalizeBackendSuccess(
   const message = messageFromPayload(payload, "No response");
   const summary = stringOrNull(payload.summary);
 
+  const beforeResult = (payload.before_result as ResultPreview) || null;
+
   return {
     ok: true,
     http_status: httpStatus,
@@ -134,6 +137,7 @@ export function normalizeBackendSuccess(
       db_executed: computeDbExecuted(mode, dryRun),
       committed: computeCommitted(mode, dryRun),
       result,
+      ...(beforeResult ? { before_result: beforeResult } : {}),
       trace: arrayOrEmpty(payload.trace),
     },
     error: null,

@@ -39,15 +39,16 @@ def test_postgres_handle_exposes_unified_read_and_write_contract(data_dir: Path,
     db_handle = init_sandbox_db(cfg)
 
     table_info = db_handle.get_table_info()
-    columns, rows = db_handle.execute_select("SELECT id, name FROM students ORDER BY id LIMIT 1")
+    columns, rows = db_handle.execute_select("SELECT sku, name FROM products ORDER BY id LIMIT 1")
     affected, last_row_id, returned_columns, returned_rows = db_handle.execute_write(
-        "UPDATE students SET gpa = 3.9 WHERE name = 'Alice Johnson'",
+        "UPDATE inventory SET quantity = 15 WHERE product_id = 1",
         dry_run=True,
     )
 
-    assert "students:" in table_info
-    assert columns == ["id", "name"]
-    assert rows == [(1, "Alice Johnson")]
+    assert "products:" in table_info
+    assert "inventory:" in table_info
+    assert columns == ["sku", "name"]
+    assert rows == [("LAP-001", "Aurora Pro 14")]
     assert affected == 1
     assert last_row_id is None
     assert returned_columns is None
