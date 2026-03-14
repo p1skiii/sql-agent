@@ -7,14 +7,24 @@ function prettyJson(value: unknown): string {
   return JSON.stringify(value, null, 2);
 }
 
-// Helper to translate backend standard English replies to Chinese
-function translateBackendMessage(text: string): string {
-  if (!text) return text;
-  const updatedMatch = text.match(/Updated\s+(\d+)\s+row\(s\)\.?/i);
-  if (updatedMatch) {
-    return text.replace(/Updated\s+(\d+)\s+row\(s\)\.?/ig, `已成功更新 ${updatedMatch[1]} 条记录。`);
+function localizeStatus(status: string | undefined): string {
+  if (status === "UNSUPPORTED") {
+    return "不支持";
   }
-  return text;
+  return status ?? "";
+}
+
+function localizeMessage(message: string | null | undefined): string {
+  if (!message) {
+    return "请求已处理";
+  }
+  if (message.includes("Write operations are disabled")) {
+    return "您试图执行数据写入/修改操作，但当前写入开关未开启。请在下方勾选【数据写入】按钮以赋予执行权限。";
+  }
+  if (message.includes("UPDATE/DELETE must include a WHERE clause.")) {
+    return "您试图执行高风险的整表写入/修改操作，但该语句没有提供 WHERE 条件，系统已拒绝执行。";
+  }
+  return message;
 }
 
 function traceForResponse(response: NormalizedChatResponse | null): unknown[] {
@@ -182,7 +192,7 @@ export default function Page() {
   const [allowWrite, setAllowWrite] = useState(false);
   const [dryRun, setDryRun] = useState(true);
   const [loading, setLoading] = useState(false);
-  const [showRawData, setShowRawData] = useState(false);
+  const [showRawData, setShowRawData] = useState(true);
 
   // Stored execution requests (array to support history persistence in the left column)
   const [historyList, setHistoryList] = useState<{ query: string; response: NormalizedChatResponse | null; error: string | null }[]>([]);
@@ -444,7 +454,7 @@ export default function Page() {
                             ) : (
                                <div className="w-2 h-2 rounded-full bg-amber-500"></div>
                             )}
-                            <span>{activeHistory.response.status}</span>
+                            <span>{localizeStatus(activeHistory.response.status)}</span>
                          </div>
                          <span data-testid="mode-badge" className="hidden">{activeHistory.response.data?.mode ?? ""}</span>
                          {activeHistory.response.data?.mode && (
@@ -456,10 +466,7 @@ export default function Page() {
 
                        {/* CORE MESSAGE */}
                        <div className="text-slate-900 dark:text-slate-100 text-[15px] leading-relaxed font-medium overflow-wrap-anywhere" data-testid="message-text">
-                         {activeHistory.response.status === "UNSUPPORTED" && activeHistory.response.message.includes("Write operations are disabled") 
-                           ? "您试图执行数据写入/修改操作，但当前写入开关未开启。请在下方勾选【数据写入】按钮以赋予执行权限。" 
-                           : translateBackendMessage(activeHistory.response.message || "请求已处理") 
-                         }
+                         {localizeMessage(activeHistory.response.message)}
                        </div>
                        {activeHistory.response.data?.summary && activeHistory.response.data.summary !== activeHistory.response.message && (
                          <div className="overflow-wrap-anywhere" data-testid="answer-block">
@@ -467,7 +474,7 @@ export default function Page() {
                              Answer
                            </div>
                            <div className="mt-1 text-slate-500 dark:text-slate-400 text-sm leading-relaxed" data-testid="summary-text">
-                             {translateBackendMessage(activeHistory.response.data.summary)}
+                             {localizeMessage(activeHistory.response.data.summary)}
                            </div>
                          </div>
                        )}

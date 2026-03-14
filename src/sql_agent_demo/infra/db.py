@@ -4,7 +4,7 @@ from __future__ import annotations
 import sqlite3
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import List, Sequence, Tuple
+from typing import Any, List, Sequence, Tuple
 
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Engine
@@ -68,6 +68,10 @@ class DatabaseHandle(ABC):
         """Return lightweight schema information for prompt construction."""
 
     @abstractmethod
+    def get_schema_overview(self) -> list[dict[str, Any]]:
+        """Return structured schema metadata for API consumers."""
+
+    @abstractmethod
     def execute_select(self, sql: str) -> Tuple[List[str], List[Sequence[object]]]:
         """Execute a read-only query and return columns with rows."""
 
@@ -97,6 +101,35 @@ class SqliteDatabaseHandle(DatabaseHandle):
                 parts.append(f"{table}: {', '.join(columns)}")
 
         return "\n".join(parts)
+
+    def get_schema_overview(self) -> list[dict[str, Any]]:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name;"
+            )
+            tables = [str(row[0]) for row in cursor.fetchall()]
+
+            overview: list[dict[str, Any]] = []
+            for table in tables:
+                col_cursor = conn.execute(f'PRAGMA table_info("{table}");')
+                columns = [
+                    {
+                        "name": str(row[1]),
+                        "type": str(row[2] or ""),
+                    }
+                    for row in col_cursor.fetchall()
+                ]
+                row_count_cursor = conn.execute(f'SELECT COUNT(*) FROM "{table}"')
+                row_count = int(row_count_cursor.fetchone()[0])
+                overview.append(
+                    {
+                        "name": table,
+                        "row_count": row_count,
+                        "columns": columns,
+                    }
+                )
+
+        return overview
 
     def execute_select(self, sql: str) -> Tuple[List[str], List[Sequence[object]]]:
         try:
@@ -161,6 +194,32 @@ class PostgresDatabaseHandle(DatabaseHandle):
             columns = [str(column["name"]) for column in inspector.get_columns(table, schema="public")]
             parts.append(f"{table}: {', '.join(columns)}")
         return "\n".join(parts)
+
+    def get_schema_overview(self) -> list[dict[str, Any]]:
+        inspector = inspect(self.engine)
+        tables = sorted(inspector.get_table_names(schema="public"))
+        overview: list[dict[str, Any]] = []
+
+        with self.engine.connect() as conn:
+            for table in tables:
+                columns = [
+                    {
+                        "name": str(column["name"]),
+                        "type": str(column["type"]),
+                    }
+                    for column in inspector.get_columns(table, schema="public")
+                ]
+                row_count_result = conn.execute(text(f'SELECT COUNT(*) AS row_count FROM "{table}"'))
+                row_count = int(row_count_result.scalar_one())
+                overview.append(
+                    {
+                        "name": table,
+                        "row_count": row_count,
+                        "columns": columns,
+                    }
+                )
+
+        return overview
 
     def execute_select(self, sql: str) -> Tuple[List[str], List[Sequence[object]]]:
         try:

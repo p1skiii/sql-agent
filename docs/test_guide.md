@@ -1,7 +1,7 @@
 # Test Guide
 
 ## Quick Validation
-- Backend unit and Flask `/run` contract checks:
+- Backend unit and Flask API contract checks:
   ```bash
   uv run pytest tests/unit tests/api --model fake
   ```
@@ -50,7 +50,7 @@
 ## Layered Structure
 - `tests/unit/`: config parsing, guard logic, serialization helpers, and other pure-module tests
 - `tests/db/`: database handle contract tests for PostgreSQL and SQLite fallback
-- `tests/api/`: Flask `/run` success and failure contract tests
+- `tests/api/`: Flask `/run`, `/api/query`, `/api/schema`, `/api/examples`, `/api/health` contract tests
 - `tests/integration/`: multi-component backend integration, including PostgreSQL-backed `/run`
 - `frontend/tests/*.test.ts`: adapter and helper tests
 - `frontend/tests/*.spec.ts`: frontend contract consumption and browser-level validation
@@ -58,7 +58,7 @@
 Legacy tests may remain in place during this phase. New tests and any critical migrated tests follow the layered structure above, but full relocation of historical tests is not required for completion.
 
 ## What Each Layer Proves
-- `pytest`: backend logic, database initialization, guards, `/run` contract behavior, and PostgreSQL support
+- `pytest`: backend logic, database initialization, guards, `/run` and lightweight API contract behavior, and PostgreSQL support
 - `test:adapter`: fake-first `/api/chat` normalized contract invariants plus helper coverage
 - `test:adapter:real`: the minimum real-model normalized regression path
 - `test:frontend`: page rendering against the stable contract, including contract-consumption checks
