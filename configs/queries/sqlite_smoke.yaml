@@ -1,0 +1,7 @@
+queries:
+  - name: list-students
+    question: "List the ids and names of all students."
+  - name: top-gpa
+    question: "Show the names and GPA values of the top 3 students."
+  - name: database-course
+    question: "List the course title and instructor for Database Systems."

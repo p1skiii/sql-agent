@@ -72,8 +72,8 @@ class DatabaseHandle(ABC):
         """Execute a read-only query and return columns with rows."""
 
     @abstractmethod
-    def execute_write(self, sql: str, *, dry_run: bool = True, require_where: bool = True) -> Tuple[int, int | None]:
-        """Execute a guarded write and return affected rows plus optional last row id."""
+    def execute_write(self, sql: str, *, dry_run: bool = True, require_where: bool = True, returning_sql: str | None = None) -> Tuple[int, int | None, List[str] | None, List[Sequence[object]] | None]:
+        """Execute a guarded write and return affected rows, optional last row id, and optional returned columns/rows."""
 
 
 class SqliteDatabaseHandle(DatabaseHandle):
@@ -113,7 +113,7 @@ class SqliteDatabaseHandle(DatabaseHandle):
         except sqlite3.Error as exc:
             raise DbExecutionError(sql, str(exc)) from exc
 
-    def execute_write(self, sql: str, *, dry_run: bool = True, require_where: bool = True) -> Tuple[int, int | None]:
+    def execute_write(self, sql: str, *, dry_run: bool = True, require_where: bool = True, returning_sql: str | None = None) -> Tuple[int, int | None, List[str] | None, List[Sequence[object]] | None]:
         try:
             validate_write_sql(sql, require_where=require_where, guard_level=self.guard_level)
         except SqlGuardViolation as exc:
@@ -126,11 +126,21 @@ class SqliteDatabaseHandle(DatabaseHandle):
                 cursor = conn.execute(sql)
                 affected = cursor.rowcount
                 last_row_id = cursor.lastrowid if hasattr(cursor, "lastrowid") else None
+
+                ret_cols, ret_rows = None, None
+                if returning_sql:
+                    try:
+                        ret_cursor = conn.execute(returning_sql)
+                        ret_cols = [desc[0] for desc in ret_cursor.description or []]
+                        ret_rows = ret_cursor.fetchall()
+                    except sqlite3.Error:
+                        pass
+
                 if dry_run:
                     conn.execute("ROLLBACK")
                 else:
                     conn.execute("COMMIT")
-                return affected, last_row_id
+                return affected, last_row_id, ret_cols, ret_rows
         except sqlite3.Error as exc:
             raise DbExecutionError(sql, str(exc)) from exc
 
@@ -167,7 +177,7 @@ class PostgresDatabaseHandle(DatabaseHandle):
         except SQLAlchemyError as exc:
             raise DbExecutionError(sql, str(exc)) from exc
 
-    def execute_write(self, sql: str, *, dry_run: bool = True, require_where: bool = True) -> Tuple[int, int | None]:
+    def execute_write(self, sql: str, *, dry_run: bool = True, require_where: bool = True, returning_sql: str | None = None) -> Tuple[int, int | None, List[str] | None, List[Sequence[object]] | None]:
         try:
             validate_write_sql(sql, require_where=require_where, guard_level=self.guard_level)
         except SqlGuardViolation as exc:
@@ -178,11 +188,21 @@ class PostgresDatabaseHandle(DatabaseHandle):
                 trans = conn.begin()
                 result = conn.execute(text(sql))
                 affected = result.rowcount if result.rowcount and result.rowcount > 0 else 0
+
+                ret_cols, ret_rows = None, None
+                if returning_sql:
+                    try:
+                        ret_result = conn.execute(text(returning_sql))
+                        ret_cols = list(ret_result.keys())
+                        ret_rows = [tuple(row) for row in ret_result.fetchall()]
+                    except SQLAlchemyError:
+                        pass
+
                 if dry_run:
                     trans.rollback()
                 else:
                     trans.commit()
-                return affected, None
+                return affected, None, ret_cols, ret_rows
         except SQLAlchemyError as exc:
             raise DbExecutionError(sql, str(exc)) from exc
 

@@ -24,17 +24,15 @@ def _extract_affected(trace_steps: list[StepTrace]) -> tuple[Optional[int], Opti
     return affected, dry_run
 
 
-def _serialize_result(query_result) -> dict | None:
-    if query_result is None:
+def _serialize_result(columns: list[str], rows: list[Sequence[Any]], explicit_row_count: int | None = None) -> dict | None:
+    if columns is None or rows is None:
         return None
 
-    columns = list(query_result.columns or [])
-    rows = list(query_result.rows or [])
     row_objects = []
     for row in rows:
         row_objects.append({column: row[idx] if idx < len(row) else None for idx, column in enumerate(columns)})
 
-    row_count = query_result.row_count if getattr(query_result, "row_count", None) is not None else len(row_objects)
+    row_count = explicit_row_count if explicit_row_count is not None else len(row_objects)
     return {
         "columns": columns,
         "rows": row_objects,
@@ -70,7 +68,15 @@ def result_to_json(result, show_sql: bool) -> dict:
         "raw_sql": result.query_result.raw_sql if result.query_result else None,
         "repaired_sql": result.query_result.repaired_sql if result.query_result else None,
         "summary": result.query_result.summary if result.query_result else None,
-        "result": _serialize_result(result.query_result),
+        "result": _serialize_result(
+            result.query_result.columns, 
+            result.query_result.rows, 
+            result.query_result.row_count
+        ) if result.query_result else None,
+        "before_result": _serialize_result(
+            result.query_result.before_columns, 
+            result.query_result.before_rows
+        ) if result.query_result and result.query_result.before_columns else None,
         "error_code": result.status.value if result.status != TaskStatus.SUCCESS else None,
         "reason": result.error_message,
         "affected_rows": affected_rows,

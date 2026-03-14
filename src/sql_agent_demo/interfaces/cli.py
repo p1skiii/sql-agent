@@ -71,8 +71,8 @@ def _bool_arg(val: str) -> bool:
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="SQL agent CLI. Recommended: `sql-agent \"List the ids and names of all students.\" --show-sql`.",
-        epilog="Advanced paths remain available through `write` and `run-file`, but the primary documented runtime uses single-question CLI plus `sql-agent-api` for the backend.",
+        description="SQL agent CLI. PostgreSQL is the business-demo path; SQLite is the experiment path.",
+        epilog="Use `ask`/`write` for the PostgreSQL business demo and `experiment-run-file` for the named SQLite experiment workflow.",
     )
     subparsers = parser.add_subparsers(dest="command")
     subparsers.required = False
@@ -87,13 +87,21 @@ def _parse_args() -> argparse.Namespace:
     file_parser.add_argument("--limit", type=int, default=1, help="Run at most this many queries from the file.")
     _add_shared_arguments(file_parser)
 
+    experiment_parser = subparsers.add_parser(
+        "experiment-run-file",
+        help="Named SQLite experiment workflow for query files and Spider-style validation.",
+    )
+    experiment_parser.add_argument("file", type=str, help="Path to YAML/JSON dataset with queries.")
+    experiment_parser.add_argument("--limit", type=int, default=1, help="Run at most this many queries from the file.")
+    _add_shared_arguments(experiment_parser)
+
     write_parser = subparsers.add_parser("write", help="Guarded single-write entrypoint (dry-run by default).")
     write_parser.add_argument("question", type=str, help="Write request in English.")
     _add_shared_arguments(write_parser)
     write_parser.set_defaults()
 
     argv = sys.argv[1:]
-    known_commands = {"ask", "run-file", "write"}
+    known_commands = {"ask", "run-file", "experiment-run-file", "write"}
     if argv and argv[0] not in known_commands and not argv[0].startswith("-"):
         argv = ["ask", *argv]
 
@@ -253,6 +261,8 @@ def main() -> None:
         "dry_run_default": getattr(args, "dry_run", None),
         "allow_force": getattr(args, "force", None),
     }
+    if args.command == "experiment-run-file" and not overrides["db_backend"]:
+        overrides["db_backend"] = "sqlite"
 
     config = load_config(overrides)
 
@@ -290,7 +300,7 @@ def main() -> None:
         )
         sys.exit(code)
 
-    if args.command == "run-file":
+    if args.command in {"run-file", "experiment-run-file"}:
         try:
             queries = load_query_file(args.file)
         except Exception as exc:
