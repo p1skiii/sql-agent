@@ -212,7 +212,7 @@ def _print_result(result, show_trace: bool, show_sql: bool, json_mode: bool = Fa
             print("\nTrace:")
             for line in _trace_lines(trace_steps):
                 print(line)
-        return 1
+        return exit_code
 
     qr = result.query_result
     print(f"Summary: {qr.summary}")
@@ -225,7 +225,7 @@ def _print_result(result, show_trace: bool, show_sql: bool, json_mode: bool = Fa
         print("\nTrace:")
         for line in _trace_lines(trace_steps):
             print(line)
-    return 0
+    return exit_code
 
 
 def main() -> None:
