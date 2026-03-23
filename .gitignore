@@ -8,6 +8,8 @@ node_modules
 .next
 frontend/node_modules
 frontend/.next
+frontend/nohup.out
+frontend/test-results/
 artifacts/
 datasets/spider_raw/
 datasets/spider_full/
