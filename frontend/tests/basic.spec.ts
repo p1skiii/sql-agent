@@ -100,3 +100,81 @@ test("WRITE commit success renders committed evidence surfaces", async ({ page }
   await openEvidencePanel(page, "Trace");
   await expect(page.getByTestId("trace-json")).toContainText("\"preview\": \"affected_rows=1, dry_run=False\"");
 });
+
+test("previous response is cleared when a new question is submitted", async ({ page }) => {
+  // First request: READ success
+  const readPayload = loadSample("read_success");
+  await page.route("**/api/chat", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(readPayload),
+    });
+  });
+  await page.goto("/");
+  await page.getByLabel("Question").fill("List all students.");
+  await page.getByTestId("submit-request").click();
+  await expect(page.getByTestId("status-badge")).toHaveText("SUCCESS");
+  await expect(page.getByTestId("sql-panel")).toBeVisible();
+
+  // Second request: intercept and delay so we can verify cleared state
+  let resolveSecond!: () => void;
+  const secondResponseReady = new Promise<void>((res) => { resolveSecond = res; });
+  await page.unrouteAll();
+  await page.route("**/api/chat", async (route) => {
+    await secondResponseReady;
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(loadSample("write_dry_run_success")),
+    });
+  });
+
+  await page.getByTestId("allow-write-toggle").check();
+  await page.getByLabel("Question").fill("Update Alice GPA to 3.9.");
+  await page.getByTestId("submit-request").click();
+
+  // While loading, the old sql-panel and result-preview should be gone
+  await expect(page.getByTestId("sql-panel")).not.toBeVisible();
+  await expect(page.getByTestId("status-badge")).toHaveText("IDLE");
+
+  // Unblock second request and verify new response
+  resolveSecond();
+  await expect(page.getByTestId("status-badge")).toHaveText("SUCCESS");
+  await expect(page.getByTestId("mode-badge")).toHaveText("WRITE");
+});
+
+test("unchecking allow_write resets dry_run to true in the request body", async ({ page }) => {
+  let capturedBody: Record<string, unknown> = {};
+  await page.route("**/api/chat", async (route) => {
+    capturedBody = JSON.parse(route.request().postData() ?? "{}") as Record<string, unknown>;
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(loadSample("read_success")),
+    });
+  });
+
+  await page.goto("/");
+  await page.getByLabel("Question").fill("List all students.");
+
+  // Enable write and uncheck dry_run, then disable write again
+  await page.getByTestId("allow-write-toggle").check();
+  await page.getByTestId("dry-run-toggle").uncheck();
+  await page.getByTestId("allow-write-toggle").uncheck();
+
+  await page.getByTestId("submit-request").click();
+  await expect(page.getByTestId("status-badge")).toHaveText("SUCCESS");
+
+  // dry_run must be true even though it was previously unchecked
+  expect(capturedBody.allow_write).toBe(false);
+  expect(capturedBody.dry_run).toBe(true);
+});
+
+test("idle state does not show HTTP status badge", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByTestId("status-badge")).toHaveText("IDLE");
+  // HTTP badge must not be present before any request is made
+  await expect(page.locator("text=HTTP 0")).not.toBeVisible();
+  await expect(page.locator("text=HTTP")).not.toBeVisible();
+});

@@ -29,7 +29,7 @@ function traceForResponse(response: NormalizedChatResponse | null): unknown[] {
   if (!response) {
     return [];
   }
-  if (response.data?.trace.length) {
+  if (response.data?.trace?.length) {
     return response.data.trace;
   }
   const rawTrace = response.raw?.trace;
@@ -117,6 +117,7 @@ export default function Page() {
 
     setLoading(true);
     setNetworkError(null);
+    setResponse(null);
 
     try {
       const resp = await fetch("/api/chat", {
@@ -175,7 +176,13 @@ export default function Page() {
                   className="h-4 w-4 accent-primary"
                   data-testid="allow-write-toggle"
                   type="checkbox"
-                  onChange={(event) => setAllowWrite(event.target.checked)}
+                  onChange={(event) => {
+                    const checked = event.target.checked;
+                    setAllowWrite(checked);
+                    if (!checked) {
+                      setDryRun(true);
+                    }
+                  }}
                 />
               </label>
 
@@ -232,9 +239,11 @@ export default function Page() {
               >
                 {response?.status ?? "IDLE"}
               </span>
-              <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs uppercase tracking-[0.2em] text-muted">
-                HTTP {response?.http_status ?? 0}
-              </span>
+              {response && (
+                <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs uppercase tracking-[0.2em] text-muted">
+                  HTTP {response.http_status}
+                </span>
+              )}
               {response?.data?.mode && (
                 <span
                   className="rounded-full border border-sky-300/20 bg-sky-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-sky-100"
