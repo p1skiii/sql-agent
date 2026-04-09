@@ -1,197 +1,140 @@
-"""Thin Flask API exposing the same JSON schema as the CLI."""
+"""Flask API for AMP task protocol."""
 from __future__ import annotations
 
 import argparse
-from dataclasses import replace
 from typing import Any
 
 from flask import Flask, jsonify, request
 
-from sql_agent_demo.core.models import AgentContext, SqlGuardViolation, TaskStatus
-from sql_agent_demo.core.sql_agent import run_task
+from sql_agent_demo.core.factory import build_task_service
+from sql_agent_demo.core.models import AgentConfig
 from sql_agent_demo.infra.config import load_config
-from sql_agent_demo.infra.db import DatabaseHandle, init_sandbox_db
 from sql_agent_demo.infra.env import load_env_file
-from sql_agent_demo.infra.llm_provider import build_models
+from sql_agent_demo.infra.llm_provider import build_models_optional
 from sql_agent_demo.infra.logging import setup_logging
-from sql_agent_demo.interfaces.serialization import result_to_json
+from sql_agent_demo.interfaces.serialization import state_to_response, status_code_for_state
 
 
-EXAMPLE_QUERIES = [
-    {"id": "students-list", "question": "List the ids and names of all students."},
-    {"id": "cs-students", "question": "Find all students majoring in Computer Science."},
-    {"id": "course-credits", "question": "Show the course code and credits for all courses."},
-    {"id": "high-gpa", "question": "Which students have a GPA above 3.7?"},
-    {"id": "enrollment-grades", "question": "Show the student names and grades for course CS205."},
-]
-
-
-def _build_agent_context(
-    *,
-    config: Any,
-    db_handle: DatabaseHandle,
-    intent_model: Any,
-    sql_model: Any,
-    payload: dict[str, Any],
-) -> tuple[AgentContext, Any]:
-    overrides = {}
-    for key, field in (("allow_write", "allow_write"), ("dry_run", "dry_run_default"), ("force", "allow_force")):
-        if payload.get(key) is not None:
-            overrides[field] = bool(payload[key]) if key != "dry_run" else payload[key]
-
-    effective_config = replace(config, **overrides) if overrides else config
+def _deprecated_response() -> tuple[Any, int]:
     return (
-        AgentContext(
-            config=effective_config,
-            db_handle=db_handle,
-            intent_model=intent_model,
-            sql_model=sql_model,
+        jsonify(
+            {
+                "ok": False,
+                "error": "This endpoint is deprecated. Use /api/tasks/plan and /api/tasks/{task_id}/confirm.",
+            }
         ),
-        effective_config,
+        410,
     )
 
 
-def _run_query_request(
-    *,
-    config: Any,
-    db_handle: DatabaseHandle,
-    intent_model: Any,
-    sql_model: Any,
-) -> Any:
-    payload = request.get_json(force=True, silent=True) or {}
-    question = payload.get("question")
-    if not question:
-        return jsonify({"ok": False, "error": "question is required"}), 400
-
-    ctx, _ = _build_agent_context(
-        config=config,
-        db_handle=db_handle,
-        intent_model=intent_model,
-        sql_model=sql_model,
-        payload=payload,
-    )
-    try:
-        result = run_task(
-            question=question,
-            ctx=ctx,
-            dry_run_override=payload.get("dry_run"),
-            force=bool(payload.get("force", False)),
-        )
-    except SqlGuardViolation as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 400
-    except Exception as exc:  # pragma: no cover - unexpected path
-        return jsonify({"ok": False, "error": str(exc)}), 500
-
-    body = result_to_json(result, show_sql=True)
-    status = 200
-    if result.status == TaskStatus.UNSUPPORTED:
-        status = 400
-    elif result.status == TaskStatus.ERROR:
-        status = 500
-    return jsonify(body), status
-
-
-def _database_identity(config: Any) -> dict[str, Any]:
-    database: dict[str, Any] = {"backend": config.db_backend}
-    if config.db_backend == "sqlite":
-        database["path"] = config.db_path
-    else:
-        database["url"] = config.db_url
-    return database
-
-
-def create_app(base_overrides: dict[str, Any] | None = None) -> Flask:
-    load_env_file()
-    setup_logging()
-    config = load_config(base_overrides or {})
-    db_handle = init_sandbox_db(config)
-    intent_model, sql_model = build_models(config)
-
+def create_app(*, config: AgentConfig | None = None, service: Any | None = None) -> Flask:
     app = Flask(__name__)
 
-    @app.post("/run")
-    def run() -> Any:  # pragma: no cover - minimal API surface
+    active_config = config or load_config()
+    active_service = service
+    boot_error: str | None = None
+
+    if active_service is None:
         try:
-            return _run_query_request(
-                config=config,
-                db_handle=db_handle,
-                intent_model=intent_model,
-                sql_model=sql_model,
-            )
-        except Exception as exc:  # pragma: no cover - unexpected path
-            return jsonify({"ok": False, "error": str(exc)}), 500
+            intent_model, sql_model = build_models_optional(active_config)
+            active_service = build_task_service(active_config, intent_model=intent_model, sql_model=sql_model)
+        except Exception as exc:  # pragma: no cover - deployment path
+            boot_error = str(exc)
+
+    @app.post("/run")
+    def deprecated_run() -> Any:
+        return _deprecated_response()
 
     @app.post("/api/query")
-    def api_query() -> Any:
-        return _run_query_request(
-            config=config,
-            db_handle=db_handle,
-            intent_model=intent_model,
-            sql_model=sql_model,
+    def deprecated_query() -> Any:
+        return _deprecated_response()
+
+    @app.post("/api/tasks/plan")
+    def api_task_plan() -> Any:
+        if active_service is None:
+            return jsonify({"ok": False, "error": boot_error or "service unavailable"}), 503
+
+        payload = request.get_json(force=True, silent=True) or {}
+        question = str(payload.get("question", "")).strip()
+        if not question:
+            return jsonify({"ok": False, "error": "question is required"}), 400
+
+        session_id = str(payload.get("session_id") or "default")
+        db_target = str(payload.get("db_target") or active_config.db_target)
+        language = str(payload.get("language") or "auto")
+
+        state = active_service.plan_task(
+            question=question,
+            session_id=session_id,
+            db_target=db_target,
+            language=language,
         )
+        body = state_to_response(state)
+        body["ok"] = state.status.value == "SUCCEEDED"
+        return jsonify(body), status_code_for_state(state)
 
-    @app.get("/api/schema")
-    def api_schema() -> Any:
-        try:
-            body = {
-                "ok": True,
-                "backend": config.db_backend,
-                "database": _database_identity(config),
-                "tables": db_handle.get_schema_overview(),
-            }
-            return jsonify(body), 200
-        except Exception as exc:  # pragma: no cover - unexpected path
-            return jsonify({"ok": False, "error": f"Failed to load schema overview: {exc}"}), 500
+    @app.post("/api/tasks/<task_id>/confirm")
+    def api_task_confirm(task_id: str) -> Any:
+        if active_service is None:
+            return jsonify({"ok": False, "error": boot_error or "service unavailable"}), 503
 
-    @app.get("/api/examples")
-    def api_examples() -> Any:
-        return jsonify({"ok": True, "examples": EXAMPLE_QUERIES}), 200
+        payload = request.get_json(force=True, silent=True) or {}
+        approve = bool(payload.get("approve", False))
+        comment = payload.get("comment")
+        comment_text = str(comment) if comment is not None else None
+
+        state = active_service.confirm_task(task_id=task_id, approve=approve, comment=comment_text)
+        body = state_to_response(state)
+        body["ok"] = state.status.value == "SUCCEEDED"
+        return jsonify(body), status_code_for_state(state)
+
+    @app.get("/api/tasks/<task_id>")
+    def api_task_status(task_id: str) -> Any:
+        if active_service is None:
+            return jsonify({"ok": False, "error": boot_error or "service unavailable"}), 503
+
+        state = active_service.get_task(task_id)
+        if state is None:
+            return jsonify({"ok": False, "error": "task not found", "task_id": task_id}), 404
+
+        body = state_to_response(state)
+        body["ok"] = state.status.value == "SUCCEEDED"
+        return jsonify(body), status_code_for_state(state)
 
     @app.get("/api/health")
     def api_health() -> Any:
-        try:
-            db_handle.execute_select("SELECT 1 AS ok")
-            body = {
-                "ok": True,
-                "status": "healthy",
-                "service": "sql-agent-demo",
-                "database": {
-                    "backend": config.db_backend,
-                    "ready": True,
-                },
-                "config": {
-                    "allow_write": config.allow_write,
-                    "dry_run_default": config.dry_run_default,
-                    "guard_level": config.guard_level,
-                },
-            }
-            return jsonify(body), 200
-        except Exception as exc:  # pragma: no cover - unexpected path
-            body = {
-                "ok": False,
-                "status": "unhealthy",
-                "service": "sql-agent-demo",
-                "database": {
-                    "backend": config.db_backend,
-                    "ready": False,
-                },
-                "error": str(exc),
-            }
-            return jsonify(body), 500
+        if active_service is None:
+            return jsonify({"ok": False, "status": "unhealthy", "error": boot_error or "service unavailable"}), 503
+
+        return (
+            jsonify(
+                {
+                    "ok": True,
+                    "status": "healthy",
+                    "service": "sql-agent-amp",
+                    "database": {"backend": active_config.db_backend, "target": active_config.db_target},
+                }
+            ),
+            200,
+        )
 
     return app
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="SQL agent backend API. Recommended entrypoint: `uv run sql-agent-api --host 127.0.0.1 --port 8000`."
-    )
-    parser.add_argument("--host", default="127.0.0.1")
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="AMP task API")
+    parser.add_argument("--host", type=str, default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
-    args = parser.parse_args()
+    parser.add_argument("--debug", action="store_true")
+    return parser.parse_args()
 
+
+def main() -> None:
+    args = _parse_args()
+    load_env_file()
+    setup_logging()
     app = create_app()
-    app.run(host=args.host, port=args.port)
+    app.run(host=args.host, port=args.port, debug=args.debug)
 
 
 if __name__ == "__main__":

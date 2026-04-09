@@ -1,7 +1,7 @@
 [project]
 name = "langchain-sql-agent-demo"
 version = "0.1.0"
-description = "Read/write-guarded SQL agent with PostgreSQL-first runtime and SQLite fallback"
+description = "AMP-style SQL task orchestrator with PostgreSQL CRUD and plan/confirm workflow"
 readme = "README.md"
 requires-python = ">=3.11,<3.12"
 dependencies = [

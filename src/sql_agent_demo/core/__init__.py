@@ -1,9 +1,25 @@
-"""Core logic for the SQL agent demo."""
+"""AMP orchestration core package."""
+
+from .factory import build_task_service
+from .models import (
+    AgentConfig,
+    ErrorInfo,
+    IntentType,
+    RiskLevel,
+    RunState,
+    StepTrace,
+    TaskStatus,
+    WorkflowStep,
+)
 
 __all__ = [
-    "models",
-    "intent",
-    "safety",
-    "summarizer",
-    "sql_agent",
+    "AgentConfig",
+    "ErrorInfo",
+    "IntentType",
+    "RiskLevel",
+    "RunState",
+    "StepTrace",
+    "TaskStatus",
+    "WorkflowStep",
+    "build_task_service",
 ]

@@ -18,3 +18,10 @@ datasets/bird/database/
 datasets/spider/spider_data/
 datasets/llmsql/sqlite_tables.db
 datasets/*.zip
+reports 2/
+reports.zip
+results.zip
+reports/figures/
+reports/error_samples_*.jsonl
+results/*.jsonl
+frontend/test-results/

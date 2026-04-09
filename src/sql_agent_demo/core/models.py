@@ -1,162 +1,145 @@
-"""Shared data models and exceptions for the SQL agent demo."""
+"""Core models for the AMP task orchestration runtime."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, field
 from enum import Enum
-from typing import Any, List, Sequence
+from typing import Any
 
 
-class SqlAgentError(Exception):
-    """Base error for SQL agent operations."""
+class IntentType(str, Enum):
+    READ = "READ"
+    WRITE = "WRITE"
+    DDL = "DDL"
+    UNSUPPORTED = "UNSUPPORTED"
 
 
-class LlmNotConfigured(SqlAgentError):
-    """Raised when an LLM provider lacks required configuration."""
+class TaskStatus(str, Enum):
+    RECEIVED = "RECEIVED"
+    PLANNED = "PLANNED"
+    PENDING_CONFIRMATION = "PENDING_CONFIRMATION"
+    AUTO_EXECUTABLE = "AUTO_EXECUTABLE"
+    BLOCKED = "BLOCKED"
+    EXECUTING = "EXECUTING"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
 
 
-class UnsupportedOperation(SqlAgentError):
-    """Raised when a requested operation is not supported."""
+class RiskLevel(str, Enum):
+    R0 = "R0"
+    R1 = "R1"
+    R2 = "R2"
 
 
-class SqlGuardViolation(SqlAgentError):
-    """Raised when SQL fails read-only safety checks."""
+@dataclass
+class AgentConfig:
+    db_backend: str = "postgres"
+    db_url: str | None = None
+    db_target: str = "postgres_main"
+    max_rows: int = 100
+    intent_model_name: str = "gpt-4o-mini"
+    sql_model_name: str = "gpt-4o-mini"
+    memory_root: str = "./state/memory"
+    task_root: str = "./state/tasks"
 
+
+@dataclass
+class WorkflowStep:
+    step: str
+    agent: str
+    purpose: str
+
+
+@dataclass
+class StepTrace:
+    name: str
+    agent: str
+    output_preview: str | None = None
+    notes: str | None = None
+    duration_ms: float | None = None
+
+
+@dataclass
+class ErrorInfo:
+    code: str
+    message: str
+    recoverable: bool
+
+
+@dataclass
+class RunState:
+    task_id: str
+    session_id: str
+    db_target: str
+    question: str
+    language: str
+    status: TaskStatus = TaskStatus.RECEIVED
+    intent: IntentType | None = None
+    risk_level: RiskLevel | None = None
+    thinking_summary: str = ""
+    workflow: list[WorkflowStep] = field(default_factory=list)
+    plan_sql: str | None = None
+    result: dict[str, Any] | None = None
+    proposal: dict[str, Any] | None = None
+    error: ErrorInfo | None = None
+    trace: list[StepTrace] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+class SqlGuardViolation(Exception):
     def __init__(self, sql: str, reason: str) -> None:
         super().__init__(reason)
         self.sql = sql
         self.reason = reason
 
 
-class DbExecutionError(SqlAgentError):
-    """Raised when the database layer cannot execute a query."""
-
-    def __init__(self, sql: str, inner_message: str) -> None:
-        super().__init__(inner_message)
-        self.sql = sql
-        self.inner_message = inner_message
-
-
-class IntentType(str, Enum):
-    READ_SIMPLE = "READ_SIMPLE"
-    READ_ANALYTIC = "READ_ANALYTIC"
-    WRITE = "WRITE"
-    COMPLEX_ACTION = "COMPLEX_ACTION"
-    UNSUPPORTED = "UNSUPPORTED"
+def state_to_dict(state: RunState) -> dict[str, Any]:
+    payload = asdict(state)
+    payload["status"] = state.status.value
+    payload["intent"] = state.intent.value if state.intent else None
+    payload["risk_level"] = state.risk_level.value if state.risk_level else None
+    return payload
 
 
-class TaskStatus(str, Enum):
-    SUCCESS = "SUCCESS"
-    ERROR = "ERROR"
-    UNSUPPORTED = "UNSUPPORTED"
+def state_from_dict(payload: dict[str, Any]) -> RunState:
+    workflow = [WorkflowStep(**item) for item in payload.get("workflow", [])]
+    trace = [StepTrace(**item) for item in payload.get("trace", [])]
+    error_data = payload.get("error")
+    error = ErrorInfo(**error_data) if isinstance(error_data, dict) else None
 
+    status_raw = payload.get("status", TaskStatus.RECEIVED.value)
+    intent_raw = payload.get("intent")
+    risk_raw = payload.get("risk_level")
 
-class SeverityLevel(str, Enum):
-    INFO = "INFO"
-    WARNING = "WARNING"
-    DANGER = "DANGER"
-
-
-@dataclass
-class AgentConfig:
-    top_k: int = 5
-    max_rows: int | None = 20
-    max_summary_rows: int = 50
-    max_prompt_tokens: int | None = None
-    max_total_tokens: int | None = None
-    max_summary_tokens: int | None = None
-    sql_default_limit: int = 50
-    allow_trace: bool = False
-    db_backend: str = "sqlite"
-    db_url: str | None = None
-    db_path: str = "./sandbox/sandbox.db"
-    schema_path: str = "./schema.sql"
-    seed_path: str = "./seed.sql"
-    overwrite_db: bool = False
-    intent_model_name: str = "gpt-4o-mini"
-    sql_model_name: str = "gpt-4o-mini"
-    selfcheck_enabled: bool = False
-    allow_repair: bool = True
-    schema_truncate_chars: int = 12000
-    language: str = "en"
-    allow_llm_summary: bool = False
-    allow_write: bool = False
-    require_where: bool = True
-    dry_run_default: bool = True
-    allow_force: bool = False
-    guard_level: str = "strict"  # strict | loose | off
-    schema_mode: str = "topk"  # topk | full
-
-
-@dataclass
-class AgentContext:
-    config: AgentConfig
-    db_handle: Any
-    intent_model: Any
-    sql_model: Any
-
-
-@dataclass
-class StepTrace:
-    name: str
-    input_preview: str | None = None
-    output_preview: str | None = None
-    severity: SeverityLevel = SeverityLevel.INFO
-    notes: str | None = None
-    duration_ms: float | None = None
-    prompt_tokens: int | None = None
-    completion_tokens: int | None = None
-    total_tokens: int | None = None
-
-
-@dataclass
-class QueryResult:
-    sql: str
-    raw_sql: str | None = None
-    repaired_sql: str | None = None
-    row_count: int = 0
-    columns: List[str] = None  # type: ignore
-    rows: List[Sequence[Any]] = None  # type: ignore
-    before_columns: List[str] | None = None
-    before_rows: List[Sequence[Any]] | None = None
-    summary: str = ""
-    trace: List[StepTrace] | None = None
-
-
-@dataclass
-class TaskResult:
-    intent: IntentType
-    status: TaskStatus
-    query_result: QueryResult | None
-    error_message: str | None
-    raw_question: str
-    trace: List[StepTrace] | None = None
-
-
-@dataclass
-class SelfCheckResult:
-    is_readonly: bool
-    is_relevant: bool
-    risk_level: SeverityLevel
-    notes: str = ""
-    passed: bool = True
-    reason: str | None = None
-    fix_hint: str | None = None
-    confidence: float | None = None
+    return RunState(
+        task_id=str(payload["task_id"]),
+        session_id=str(payload.get("session_id", "default")),
+        db_target=str(payload.get("db_target", "postgres_main")),
+        question=str(payload.get("question", "")),
+        language=str(payload.get("language", "en")),
+        status=TaskStatus(str(status_raw)),
+        intent=IntentType(str(intent_raw)) if intent_raw else None,
+        risk_level=RiskLevel(str(risk_raw)) if risk_raw else None,
+        thinking_summary=str(payload.get("thinking_summary", "")),
+        workflow=workflow,
+        plan_sql=payload.get("plan_sql"),
+        result=payload.get("result"),
+        proposal=payload.get("proposal"),
+        error=error,
+        trace=trace,
+        metadata=payload.get("metadata", {}) if isinstance(payload.get("metadata"), dict) else {},
+    )
 
 
 __all__ = [
     "AgentConfig",
-    "AgentContext",
-    "DbExecutionError",
+    "ErrorInfo",
     "IntentType",
-    "LlmNotConfigured",
-    "QueryResult",
-    "SelfCheckResult",
-    "SeverityLevel",
-    "SqlAgentError",
+    "RiskLevel",
+    "RunState",
     "SqlGuardViolation",
     "StepTrace",
-    "TaskResult",
     "TaskStatus",
-    "UnsupportedOperation",
+    "WorkflowStep",
+    "state_from_dict",
+    "state_to_dict",
 ]

@@ -1,103 +1,56 @@
-"""Shared JSON serialization for CLI and HTTP API."""
+"""Serialization helpers for AMP task responses."""
 from __future__ import annotations
 
-import json
-from typing import Optional
+from typing import Any
 
-from sql_agent_demo.core.models import IntentType, TaskStatus
-from sql_agent_demo.core.models import StepTrace  # type: ignore
+from sql_agent_demo.core.models import RunState, TaskStatus
 
 
-def _extract_affected(trace_steps: list[StepTrace]) -> tuple[Optional[int], Optional[bool]]:
-    import re
-
-    affected = None
-    dry_run = None
-    for step in trace_steps:
-        if step.name in ("execute_write", "execute_write_probe") and step.output_preview:
-            m = re.search(r"affected_rows=(\d+)", step.output_preview)
-            if m:
-                affected = int(m.group(1))
-            m2 = re.search(r"dry_run=(true|false)", step.output_preview, flags=re.IGNORECASE)
-            if m2:
-                dry_run = m2.group(1).lower() == "true"
-    return affected, dry_run
-
-
-def _serialize_result(columns: list[str], rows: list[Sequence[Any]], explicit_row_count: int | None = None) -> dict | None:
-    if columns is None or rows is None:
-        return None
-
-    row_objects = []
-    for row in rows:
-        row_objects.append({column: row[idx] if idx < len(row) else None for idx, column in enumerate(columns)})
-
-    row_count = explicit_row_count if explicit_row_count is not None else len(row_objects)
-    return {
-        "columns": columns,
-        "rows": row_objects,
-        "row_count": row_count,
-    }
-
-
-def _diagnose(result) -> dict:
-    msg = (result.error_message or "").lower()
-    diagnosis = {"category": "UNKNOWN", "action": "inspect", "evidence": result.error_message}
-    if "where clause" in msg or "wide update" in msg:
-        diagnosis = {"category": "GUARD", "action": "narrow_where", "evidence": result.error_message}
-    elif "not null constraint" in msg or "foreign key" in msg:
-        diagnosis = {"category": "DB_CONSTRAINT", "action": "add_required_fields", "evidence": result.error_message}
-    elif "failed to generate" in msg or "refused" in msg:
-        diagnosis = {"category": "LLM_SQL_INVALID", "action": "rephrase_request", "evidence": result.error_message}
-    elif result.status.name == "UNSUPPORTED":
-        diagnosis = {"category": "GUARD", "action": "review_policy", "evidence": result.error_message}
-    elif result.status.name == "ERROR":
-        diagnosis = {"category": "EXECUTION_ERROR", "action": "check_stack", "evidence": result.error_message}
-    return diagnosis
-
-
-def result_to_json(result, show_sql: bool) -> dict:
-    trace_steps = result.trace or (result.query_result.trace if result.query_result else None) or []
-    affected_rows, dry_run = _extract_affected(trace_steps)
-    obj = {
-        "ok": result.status == TaskStatus.SUCCESS,
-        "mode": "WRITE" if result.intent == IntentType.WRITE else "READ",
-        "question": result.raw_question,
-        "status": result.status.value,
-        "sql": (result.query_result.sql if result.query_result and show_sql else None),
-        "raw_sql": result.query_result.raw_sql if result.query_result else None,
-        "repaired_sql": result.query_result.repaired_sql if result.query_result else None,
-        "summary": result.query_result.summary if result.query_result else None,
-        "result": _serialize_result(
-            result.query_result.columns, 
-            result.query_result.rows, 
-            result.query_result.row_count
-        ) if result.query_result else None,
-        "before_result": _serialize_result(
-            result.query_result.before_columns, 
-            result.query_result.before_rows
-        ) if result.query_result and result.query_result.before_columns else None,
-        "error_code": result.status.value if result.status != TaskStatus.SUCCESS else None,
-        "reason": result.error_message,
-        "affected_rows": affected_rows,
-        "dry_run": dry_run,
+def state_to_response(state: RunState) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "task_id": state.task_id,
+        "status": state.status.value,
+        "risk_level": state.risk_level.value if state.risk_level else None,
+        "thinking_summary": state.thinking_summary,
+        "workflow": [
+            {"step": item.step, "agent": item.agent, "purpose": item.purpose}
+            for item in state.workflow
+        ],
+        "result": state.result,
+        "proposal": state.proposal,
+        "error": (
+            {
+                "code": state.error.code,
+                "message": state.error.message,
+                "recoverable": state.error.recoverable,
+            }
+            if state.error
+            else None
+        ),
         "trace": [
             {
                 "name": step.name,
-                "duration_ms": step.duration_ms,
-                "prompt_tokens": step.prompt_tokens,
-                "completion_tokens": step.completion_tokens,
-                "total_tokens": step.total_tokens,
-                "notes": step.notes,
-                "severity": step.severity.value if step.severity else None,
+                "agent": step.agent,
                 "preview": step.output_preview,
+                "notes": step.notes,
+                "duration_ms": step.duration_ms,
             }
-            for step in trace_steps
+            for step in state.trace
         ],
     }
-    if result.status != TaskStatus.SUCCESS:
-        obj["diagnosis"] = _diagnose(result)
-    return obj
+    return payload
 
 
-__all__ = ["result_to_json"]
+def status_code_for_state(state: RunState) -> int:
+    if state.status == TaskStatus.FAILED:
+        if state.error and state.error.code == "TASK_NOT_FOUND":
+            return 404
+        if state.error and state.error.code == "MODEL_UNAVAILABLE":
+            return 503
+        return 500
+    if state.status == TaskStatus.BLOCKED:
+        return 409
+    return 200
+
+
+__all__ = ["state_to_response", "status_code_for_state"]
